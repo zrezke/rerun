@@ -8,7 +8,6 @@ use re_log_types::TimePoint;
 use crate::ViewerContext;
 
 use super::{NodeGraphEntry, SceneNodeGraph};
-use egui_node_graph::*;
 // --- Main view ---
 
 #[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
