@@ -22,6 +22,8 @@ from rerun.log.tensor import log_tensor
 from rerun.log.text import log_text_entry
 from rerun.log.transform import log_rigid3, log_unknown_transform, log_view_coordinates
 from rerun.script_helpers import script_add_args, script_setup, script_teardown
+from rerun.log.pipeline_graph import log_pipeline_graph
+
 
 __all__ = [
     "LoggingHandler",
@@ -34,6 +36,7 @@ __all__ = [
     "log_extension_components",
     "log_image_file",
     "log_image",
+    "log_pipeline_graph",
     "log_line_segments",
     "log_line_strip",
     "log_mesh_file",
@@ -173,7 +176,8 @@ def init(application_id: str, spawn: bool = False, default_enabled: bool = True,
         stack = inspect.stack()
         for frame in stack[:MAX_FRAMES]:
             filename = frame[FRAME_FILENAME_INDEX]
-            path = pathlib.Path(str(filename)).resolve()  # normalize before comparison!
+            # normalize before comparison!
+            path = pathlib.Path(str(filename)).resolve()
             if "rerun/examples" in str(path):
                 application_path = path
     except Exception:
@@ -312,7 +316,8 @@ def spawn(port: int = 9876, connect: bool = True) -> None:
 
     # start_new_session=True ensures the spawned process does NOT die when
     # we hit ctrl-c in the terminal running the parent Python process.
-    subprocess.Popen([python_executable, "-m", "rerun", "--port", str(port)], start_new_session=True)
+    subprocess.Popen([python_executable, "-m", "rerun",
+                     "--port", str(port)], start_new_session=True)
 
     # TODO(emilk): figure out a way to postpone connecting until the rerun viewer is listening.
     # For example, wait until it prints "Hosting a SDK server over TCP at …"

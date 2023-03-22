@@ -20,7 +20,9 @@ use super::{
 };
 
 /// Describes how the scene is navigated, determining if it is a 2D or 3D experience.
-#[derive(Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(
+    Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, std::fmt::Debug,
+)]
 pub enum SpatialNavigationMode {
     #[default]
     TwoD,
@@ -408,7 +410,6 @@ impl ViewSpatialState {
             self.scene_bbox_accum = self.scene_bbox_accum.union(self.scene_bbox);
         }
         self.scene_num_primitives = scene.primitives.num_primitives();
-
         match self.nav_mode {
             SpatialNavigationMode::ThreeD => {
                 let coordinates =

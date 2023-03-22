@@ -7,6 +7,7 @@ use crate::ui::{
 };
 
 use super::{
+    depthai,
     item::{Item, ItemCollection},
     HoverHighlight,
 };
@@ -32,6 +33,7 @@ pub struct ViewerContext<'a> {
     pub re_ui: &'a re_ui::ReUi,
 
     pub render_ctx: &'a mut re_renderer::RenderContext,
+    pub depthai_state: &'a mut depthai::State,
 }
 
 impl<'a> ViewerContext<'a> {

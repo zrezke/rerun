@@ -11,6 +11,7 @@ use super::{
     space_view_heuristics::default_queried_entities,
     view_bar_chart,
     view_category::ViewCategory,
+    view_node_graph,
     view_spatial::{self},
     view_tensor, view_text, view_time_series,
 };
@@ -131,6 +132,7 @@ impl SpaceView {
                     }
                 }
             }
+            ViewCategory::NodeGraph => self.view_state.state_node_graph.selection_ui(ctx.re_ui, ui),
         }
     }
 
@@ -189,6 +191,11 @@ impl SpaceView {
                 let mut scene = view_tensor::SceneTensor::default();
                 scene.load(ctx, &query);
                 self.view_state.ui_tensor(ctx, ui, &scene);
+            }
+            ViewCategory::NodeGraph => {
+                let mut scene = view_node_graph::SceneNodeGraph::default();
+                scene.load(ctx, &query);
+                self.view_state.ui_node_graph(ctx, ui, &scene);
             }
         };
     }
@@ -252,6 +259,7 @@ pub struct ViewState {
     state_bar_chart: view_bar_chart::BarChartState,
     pub state_spatial: view_spatial::ViewSpatialState,
     state_tensors: ahash::HashMap<InstancePath, view_tensor::ViewTensorState>,
+    state_node_graph: view_node_graph::ViewNodeGraphState,
 }
 
 impl ViewState {
@@ -327,6 +335,21 @@ impl ViewState {
         }
         .show(ui, |ui| {
             view_text::view_text(ctx, ui, &mut self.state_text, scene);
+        });
+    }
+
+    fn ui_node_graph(
+        &mut self,
+        ctx: &mut ViewerContext<'_>,
+        ui: &mut egui::Ui,
+        scene: &view_node_graph::SceneNodeGraph,
+    ) {
+        egui::Frame {
+            inner_margin: re_ui::ReUi::view_padding().into(),
+            ..egui::Frame::default()
+        }
+        .show(ui, |ui| {
+            view_node_graph::view_node_graph(ctx, ui, &mut self.state_node_graph, scene)
         });
     }
 

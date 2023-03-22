@@ -1,4 +1,6 @@
 use egui::NumExt as _;
+use itertools::Itertools;
+use poll_promise::Promise;
 use re_data_store::{
     query_latest_single, ColorMap, ColorMapper, EditableAutoValue, EntityPath, EntityProperties,
 };
@@ -8,6 +10,7 @@ use re_log_types::{
 };
 
 use crate::{
+    misc::depthai,
     ui::{view_spatial::SpatialNavigationMode, Blueprint},
     Item, UiVerbosity, ViewerContext,
 };
@@ -15,6 +18,22 @@ use crate::{
 use super::{data_ui::DataUi, space_view::ViewState};
 
 // ---
+
+struct DeviceConfigurationTabViewer {}
+
+pub type Tab = i32;
+
+impl egui_dock::TabViewer for DeviceConfigurationTabViewer {
+    type Tab = Tab;
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        ui.label(format!("Tab {}", tab));
+    }
+
+    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+        format!("Tab {}", tab).into()
+    }
+}
 
 /// The "Selection View" side-bar.
 #[derive(Default, serde::Deserialize, serde::Serialize)]
@@ -42,35 +61,115 @@ impl SelectionPanel {
             ui,
             blueprint.selection_panel_expanded,
             |ui: &mut egui::Ui| {
-                egui::TopBottomPanel::top("selection_panel_title_bar")
-                    .exact_height(re_ui::ReUi::title_bar_height())
-                    .frame(egui::Frame {
-                        inner_margin: egui::Margin::symmetric(re_ui::ReUi::view_padding(), 0.0),
-                        ..Default::default()
-                    })
-                    .show_inside(ui, |ui| {
-                        if let Some(selection) = ctx
-                            .rec_cfg
-                            .selection_state
-                            .selection_ui(ctx.re_ui, ui, blueprint)
-                        {
-                            ctx.set_multi_selection(selection.iter().cloned());
-                        }
-                    });
-
+                egui::TopBottomPanel::top("Device configuration").show_inside(ui, |ui| {
+                    ctx.re_ui
+                        .large_collapsing_header(ui, "Device configuration", true, |ui| {
+                            self.device_configuration_ui(ui, ctx);
+                        })
+                });
                 egui::ScrollArea::both()
-                    .auto_shrink([false; 2])
+                    .auto_shrink([true; 2])
                     .show(ui, |ui| {
-                        egui::Frame {
-                            inner_margin: egui::Margin::same(re_ui::ReUi::view_padding()),
-                            ..Default::default()
-                        }
-                        .show(ui, |ui| {
-                            self.contents(ui, ctx, blueprint);
-                        });
+                        egui::TopBottomPanel::top("selection_panel_title_bar")
+                            .exact_height(re_ui::ReUi::title_bar_height())
+                            .frame(egui::Frame {
+                                inner_margin: egui::Margin::symmetric(
+                                    re_ui::ReUi::view_padding(),
+                                    0.0,
+                                ),
+                                ..Default::default()
+                            })
+                            .show_inside(ui, |ui| {
+                                if let Some(selection) = ctx
+                                    .rec_cfg
+                                    .selection_state
+                                    .selection_ui(ctx.re_ui, ui, blueprint)
+                                {
+                                    ctx.set_multi_selection(selection.iter().cloned());
+                                }
+                            });
+
+                        egui::ScrollArea::both()
+                            .auto_shrink([true; 2])
+                            .show(ui, |ui| {
+                                egui::Frame {
+                                    inner_margin: egui::Margin::same(re_ui::ReUi::view_padding()),
+                                    ..Default::default()
+                                }
+                                .show(ui, |ui| {
+                                    self.contents(ui, ctx, blueprint);
+                                });
+                            });
                     });
             },
         );
+    }
+
+    fn device_configuration_ui(&mut self, ui: &mut egui::Ui, ctx: &mut ViewerContext<'_>) {
+        // This block handles resetting the depthai_config_state.config_update_promise once it has finished
+        // It sets the pipeline state and clears the promise
+        let pipeline_state: Option<depthai::PipelineState> =
+            match ctx.depthai_state.device_config.config_update_promise {
+                Some(ref mut promise) => match promise.ready() {
+                    Some(result) => result.as_ref().and_then(|val| Some(val.clone())),
+                    None => None,
+                },
+                None => None,
+            };
+        if pipeline_state.is_some() {
+            ctx.depthai_state.device_config.pipeline_state =
+                Some(pipeline_state.as_ref().unwrap().clone());
+            ctx.depthai_state.device_config.config_update_promise =
+                None::<Promise<Option<depthai::PipelineState>>>;
+        }
+
+        if ctx
+            .depthai_state
+            .device_config
+            .config_update_promise
+            .is_some()
+        {
+            ui.add(egui::Spinner::new());
+            return;
+        }
+
+        // re_log::info!("pipeline_state: {:?}", pipeline_state);
+        let mut device_config = ctx.depthai_state.device_config.config.clone();
+        let mut subscriptions = ctx.depthai_state.subscriptions.clone();
+
+        ui.vertical(|ui| {
+            ui.collapsing("Color Camera", |ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Resolution: ");
+                        egui::ComboBox::from_id_source("color_camera_resolution")
+                            .width(70.0)
+                            .selected_text(format!("{}", device_config.color_camera.resolution))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut device_config.color_camera.resolution,
+                                    depthai::ColorCameraResolution::THE_1080_P,
+                                    "1080p",
+                                );
+                                ui.selectable_value(
+                                    &mut device_config.color_camera.resolution,
+                                    depthai::ColorCameraResolution::THE_4_K,
+                                    "4k",
+                                );
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("FPS: ");
+                        ui.add(egui::DragValue::new(&mut device_config.color_camera.fps));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut subscriptions.color_image, "Show color camera");
+                    })
+                });
+            });
+        });
+        ctx.depthai_state.set_subscriptions(&subscriptions);
+        ctx.depthai_state.device_config.set(&device_config);
     }
 
     #[allow(clippy::unused_self)]

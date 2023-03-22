@@ -41,3 +41,5 @@ pub fn help_hover_button(ui: &mut egui::Ui) -> egui::Response {
         egui::Label::new("❓").sense(egui::Sense::click()), // sensing clicks also gives hover effect
     )
 }
+
+pub(crate) mod depthai;

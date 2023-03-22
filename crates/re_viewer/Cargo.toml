@@ -57,6 +57,7 @@ re_string_interner.workspace = true
 re_tensor_ops.workspace = true
 re_ui.workspace = true
 re_ws_comms = { workspace = true, features = ["client"] }
+serde_json="1"
 
 # Internal (optional):
 re_analytics = { workspace = true, optional = true }
@@ -72,6 +73,7 @@ eframe = { workspace = true, default-features = false, features = [
   "puffin",
   "wgpu",
 ] }
+ehttp = "0.2.0"
 egui = { workspace = true, features = ["extra_debug_asserts", "tracing"] }
 egui_dock = { workspace = true, features = ["serde"] }
 egui_extras = { workspace = true, features = ["tracing"] }
