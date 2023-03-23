@@ -163,11 +163,96 @@ impl SelectionPanel {
                         ui.add(egui::DragValue::new(&mut device_config.color_camera.fps));
                     });
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut subscriptions.color_image, "Show color camera");
-                    })
+                        ui.checkbox(&mut subscriptions.color_image, "Show Color camera");
+                    });
                 });
             });
+            ui.collapsing("Left Mono Camera", |ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Resolution: ");
+                        egui::ComboBox::from_id_source("left_camera_resolution")
+                            .width(70.0)
+                            .selected_text(format!("{}", device_config.left_camera.resolution))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut device_config.left_camera.resolution,
+                                    depthai::MonoCameraResolution::THE_400_P,
+                                    "400p",
+                                );
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("FPS: ");
+                        ui.add(egui::DragValue::new(&mut device_config.color_camera.fps));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut subscriptions.left_image, "Show Left Mono camera");
+                    });
+                });
+            });
+            ui.collapsing("Right Mono Camera", |ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Resolution: ");
+                        egui::ComboBox::from_id_source("right_camera_resolution")
+                            .width(70.0)
+                            .selected_text(format!("{}", device_config.right_camera.resolution))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut device_config.right_camera.resolution,
+                                    depthai::MonoCameraResolution::THE_400_P,
+                                    "400p",
+                                );
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("FPS: ");
+                        ui.add(egui::DragValue::new(&mut device_config.color_camera.fps));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut subscriptions.right_image, "Show Right Mono camera");
+                    });
+                });
+            });
+            let depth_enabled_label = if device_config.depth_enabled {
+                "Disable Depth"
+            } else {
+                "Enable depth"
+            };
+            ui.collapsing("Depth", |ui| {
+                ui.checkbox(&mut device_config.depth_enabled, depth_enabled_label);
+                if !device_config.depth_enabled {
+                    return;
+                }
+                let mut depth = device_config.depth.unwrap_or_default();
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Default profile preset:");
+                        egui::ComboBox::from_id_source("depth_default_profile_preset")
+                            .width(70.0)
+                            .selected_text(format!("{}", depth.default_profile_preset))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut depth.default_profile_preset,
+                                    depthai::DepthProfilePreset::HIGH_DENSITY,
+                                    "High Density",
+                                );
+                                ui.selectable_value(
+                                    &mut depth.default_profile_preset,
+                                    depthai::DepthProfilePreset::HIGH_ACCURACY,
+                                    "High Accuracy",
+                                );
+                            })
+                    });
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut subscriptions.depth_image, "Show Depth");
+                    });
+                });
+                device_config.depth = Some(depth);
+            });
         });
+
         ctx.depthai_state.set_subscriptions(&subscriptions);
         ctx.depthai_state.device_config.set(&device_config);
     }

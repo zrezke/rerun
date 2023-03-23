@@ -58,9 +58,27 @@ impl fmt::Debug for ColorCameraConfig {
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
+pub enum BoardSocket {
+    AUTO,
+    RGB,
+    LEFT,
+    RIGHT,
+    CENTER,
+    CAM_A,
+    CAM_B,
+    CAM_C,
+    CAM_D,
+    CAM_E,
+    CAM_F,
+    CAM_G,
+    CAM_H,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
 pub struct MonoCameraConfig {
     pub fps: u8,
     pub resolution: MonoCameraResolution,
+    pub board_socket: BoardSocket,
 }
 
 impl Default for MonoCameraConfig {
@@ -68,6 +86,7 @@ impl Default for MonoCameraConfig {
         Self {
             fps: 30,
             resolution: MonoCameraResolution::THE_400_P,
+            board_socket: BoardSocket::AUTO,
         }
     }
 }
@@ -82,11 +101,52 @@ impl fmt::Debug for MonoCameraConfig {
     }
 }
 
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
+pub enum DepthProfilePreset {
+    HIGH_DENSITY,
+    HIGH_ACCURACY,
+}
+
+impl Default for DepthProfilePreset {
+    fn default() -> Self {
+        Self::HIGH_DENSITY
+    }
+}
+
+impl fmt::Display for DepthProfilePreset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HIGH_DENSITY => write!(f, "High Density"),
+            Self::HIGH_ACCURACY => write!(f, "High Accuracy"),
+        }
+    }
+}
+
+pub enum DepthMedianFilter {
+    MEDIAN_OFF,
+    KERNEL_3x3,
+    KERNEL_5x5,
+    KERNEL_7x7,
+}
+
+impl Default for DepthMedianFilter {
+    fn default() -> Self {
+        Self::KERNEL_7x7
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, Default)]
+pub struct DepthConfig {
+    pub default_profile_preset: DepthProfilePreset,
+}
+
 #[derive(Default, serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
 pub struct DeviceConfig {
     pub color_camera: ColorCameraConfig,
     pub left_camera: MonoCameraConfig,
     pub right_camera: MonoCameraConfig,
+    pub depth_enabled: bool,
+    pub depth: Option<DepthConfig>,
 }
 
 #[derive(fmt::Debug, Clone)]
@@ -135,12 +195,15 @@ impl DeviceConfigState {
             return;
         }
         self.config = *config;
+        self.config.left_camera.board_socket = BoardSocket::LEFT;
+        self.config.right_camera.board_socket = BoardSocket::RIGHT;
+
         self.config_update_promise.get_or_insert_with(|| {
             let (sender, promise) = Promise::new();
             let body = serde_json::to_string(&self.config).unwrap().into_bytes();
             let request = ehttp::Request::post("http://localhost:8000/pipeline", body);
             ehttp::fetch(request, move |response| {
-                let response = response.unwrap();
+                let response = response.unwrap(); // TODO(filip): Handle error
                 let body = String::from(response.text().unwrap_or_default());
                 let json: PipelineResponse = serde_json::from_str(&body).unwrap_or_default();
                 let pipeline_state = PipelineState {
@@ -173,23 +236,12 @@ enum ChannelId {
     DepthImage,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq, Default)]
 pub struct Subscriptions {
     pub color_image: bool,
     pub left_image: bool,
     pub right_image: bool,
     pub depth_image: bool,
-}
-
-impl Default for Subscriptions {
-    fn default() -> Self {
-        Self {
-            color_image: false,
-            left_image: false,
-            right_image: false,
-            depth_image: false,
-        }
-    }
 }
 
 impl State {
