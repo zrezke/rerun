@@ -184,7 +184,7 @@ impl SelectionPanel {
                     });
                     ui.horizontal(|ui| {
                         ui.label("FPS: ");
-                        ui.add(egui::DragValue::new(&mut device_config.color_camera.fps));
+                        ui.add(egui::DragValue::new(&mut device_config.left_camera.fps));
                     });
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut subscriptions.left_image, "Show Left Mono camera");
@@ -208,7 +208,7 @@ impl SelectionPanel {
                     });
                     ui.horizontal(|ui| {
                         ui.label("FPS: ");
-                        ui.add(egui::DragValue::new(&mut device_config.color_camera.fps));
+                        ui.add(egui::DragValue::new(&mut device_config.right_camera.fps));
                     });
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut subscriptions.right_image, "Show Right Mono camera");
