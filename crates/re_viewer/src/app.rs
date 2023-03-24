@@ -19,7 +19,8 @@ use re_ui::Command;
 
 use crate::{
     app_icon::setup_app_icon,
-    misc::{depthai, AppOptions, Caches, RecordingConfig, ViewerContext},
+    depthai::depthai,
+    misc::{AppOptions, Caches, RecordingConfig, ViewerContext},
     ui::{data_ui::ComponentUiRegistry, Blueprint},
     viewer_analytics::ViewerAnalytics,
 };
@@ -409,6 +410,7 @@ impl eframe::App for App {
 
     fn update(&mut self, egui_ctx: &egui::Context, frame: &mut eframe::Frame) {
         let frame_start = Instant::now();
+        self.state.depthai_state.update(); // Always update depthai state
         if self.icon_status == AppIconStatus::NotSetTryAgain {
             self.icon_status = setup_app_icon();
         }
@@ -541,6 +543,7 @@ impl eframe::App for App {
             egui_ctx.input(|i| i.time),
             frame_start.elapsed().as_secs_f32(),
         );
+        egui_ctx.request_repaint(); // Force repaint even when out of focus
     }
 }
 
@@ -898,7 +901,7 @@ struct AppState {
     profiler: crate::Profiler,
 
     selected_device: depthai::DeviceId,
-    depthai_state: HashMap<depthai::DeviceId, depthai::State>,
+    depthai_state: depthai::State,
 }
 
 impl AppState {
@@ -945,9 +948,7 @@ impl AppState {
             rec_cfg,
             re_ui,
             render_ctx,
-            depthai_state: depthai_state
-                .entry(*selected_device)
-                .or_default(),
+            depthai_state,
         };
 
         let blueprint = blueprints.entry(selected_app_id.clone()).or_default();

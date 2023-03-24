@@ -7,10 +7,11 @@ use crate::ui::{
 };
 
 use super::{
-    depthai,
     item::{Item, ItemCollection},
     HoverHighlight,
 };
+
+use crate::depthai::depthai;
 
 /// Common things needed by many parts of the viewer.
 pub struct ViewerContext<'a> {

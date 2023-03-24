@@ -10,7 +10,7 @@ use re_log_types::{
 };
 
 use crate::{
-    misc::depthai,
+    depthai::depthai,
     ui::{view_spatial::SpatialNavigationMode, Blueprint},
     Item, UiVerbosity, ViewerContext,
 };
@@ -122,6 +122,34 @@ impl SelectionPanel {
             ctx.depthai_state.device_config.config_update_promise =
                 None::<Promise<Option<depthai::PipelineState>>>;
         }
+
+        let mut available_devices = ctx.depthai_state.get_devices();
+        let mut selected_device = ctx
+            .depthai_state
+            .selected_device
+            .clone()
+            .unwrap_or_default();
+        if selected_device.id != -1 && available_devices.is_empty() {
+            available_devices.push(selected_device.id);
+        }
+
+        ui.horizontal(|ui| {
+            ui.label("Device: ");
+            egui::ComboBox::from_id_source("device")
+                .width(70.0)
+                .selected_text(if selected_device.id != -1 {
+                    selected_device.id.to_string()
+                } else {
+                    "No device selected".to_string()
+                })
+                .show_ui(ui, |ui| {
+                    for device in available_devices {
+                        ui.selectable_value(&mut selected_device.id, device, device.to_string());
+                    }
+                });
+        });
+
+        ctx.depthai_state.selected_device = Some(selected_device);
 
         if ctx
             .depthai_state

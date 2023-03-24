@@ -1,7 +1,11 @@
+use super::api;
 use ahash::{HashMap, HashMapExt};
+use egui_notify::Toasts;
 use ehttp;
 use poll_promise::Promise;
-use std::fmt;
+use std::sync::mpsc::channel;
+use std::time::{Duration, Instant};
+use std::{fmt, future::Future};
 
 #[derive(serde::Deserialize, serde::Serialize, fmt::Debug, PartialEq, Clone, Copy)]
 pub enum ColorCameraResolution {
@@ -217,15 +221,53 @@ impl DeviceConfigState {
     }
 }
 
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
+pub struct Device {
+    pub id: DeviceId,
+    // Add more fields later
+}
+impl Default for Device {
+    fn default() -> Self {
+        Self { id: -1 }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct State {
+    #[serde(skip)]
+    devices_available: Option<Vec<DeviceId>>,
+    #[serde(skip)]
+    pub selected_device: Option<Device>,
     pub device_config: DeviceConfigState,
+
     #[serde(skip)] // Want to resubscribe to api when app is reloaded
     pub subscriptions: Subscriptions,
     #[serde(skip)]
     pub subscribe_promise: Option<Promise<Result<(), ()>>>,
     #[serde(skip)]
     pub unsubscribe_promise: Option<Promise<Result<(), ()>>>,
+    #[serde(skip)]
+    pub api: api::Api,
+    #[serde(skip)]
+    poll_instant: Option<Instant>, // No default for Instant
+    #[serde(skip)]
+    toasts: Toasts,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            devices_available: None,
+            selected_device: None,
+            device_config: DeviceConfigState::default(),
+            subscriptions: Subscriptions::default(),
+            subscribe_promise: None,
+            unsubscribe_promise: None,
+            api: api::Api::default(),
+            poll_instant: Some(Instant::now()),
+            toasts: Toasts::new(),
+        }
+    }
 }
 
 #[repr(u8)]
@@ -303,9 +345,9 @@ impl State {
             let body = String::from(response.text().unwrap_or_default());
             let json: PipelineResponse = serde_json::from_str(&body).unwrap_or_default();
             if response.ok {
-                subscribe_sender.send(Ok(()))
+                subscribe_sender.send(Ok(()));
             } else {
-                subscribe_sender.send(Err(()))
+                subscribe_sender.send(Err(()));
             }
         });
 
@@ -325,6 +367,62 @@ impl State {
         self.subscribe_promise.insert(subscribe_promise);
         self.unsubscribe_promise.insert(unsubsribe_promise);
     }
+
+    pub fn get_devices(&mut self) -> Vec<DeviceId> {
+        // Return stored available devices or fetch them from the api (they get fetched every 30s via poller)
+        if let Some(devices) = self.devices_available.clone() {
+            return devices;
+        }
+        Vec::new()
+    }
+
+    pub fn update(&mut self) {
+        // TODO: Make this async? only if you are a borrowing master
+        if let Some(poll_instant) = self.poll_instant {
+            if poll_instant.elapsed().as_secs() < 2 {
+                return;
+            }
+            if let Some(result) = self.api.get_devices() {
+                // TODO: Show toast if api error
+                match result {
+                    Ok(devices) => {
+                        self.devices_available = Some(devices.clone());
+                        re_log::info!("Devices: {:?}", devices);
+                        if self.selected_device.is_none() {
+                            if devices.len() > 0 {
+                                self.set_device(*devices.first().unwrap());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        re_log::info!("Toast?: {:?}", e.detail);
+                        // TODO: Add toasts (have to add toast to state to state or create internal representation and publish in state)
+                    }
+                }
+            }
+            self.poll_instant = Some(Instant::now());
+        } else {
+            self.poll_instant = Some(Instant::now());
+        }
+    }
+
+    pub fn set_device(&mut self, device_id: DeviceId) {
+        re_log::info!("Setting device: {:?}", device_id);
+        if let Some(current_device) = self.selected_device {
+            if current_device.id == device_id {
+                return;
+            }
+        }
+        if let Some(result) = self.api.select_device(&device_id) {
+            re_log::info!("Some result");
+            if let Ok(device) = result {
+                re_log::info!("Device: {:?}", device.id);
+                self.selected_device = Some(device);
+                self.device_config = DeviceConfigState::default();
+                self.set_subscriptions(&Subscriptions::default());
+            }
+        }
+    }
 }
 
-pub type DeviceId = u32;
+pub type DeviceId = i64; // i64 because of serialization
