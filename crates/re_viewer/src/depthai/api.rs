@@ -69,8 +69,8 @@ impl Api {
         if self.pending.select_device.is_some() {
             let mut promise_ready = false;
             if let Some(response) = self.pending.select_device.as_mut().unwrap().ready() {
-                return Some(response.clone());
                 promise_ready = true;
+                return Some(response.clone());
             }
             if promise_ready {
                 self.pending.select_device = None;
@@ -83,6 +83,7 @@ impl Api {
         ehttp::fetch(request, move |response| match response {
             Ok(response) => {
                 let body = String::from(response.text().unwrap_or_default());
+                re_log::info!("Body of set: {:?}", body);
                 if response.ok {
                     let device: depthai::Device = serde_json::from_str(&body).unwrap_or_default();
                     sender.send(Ok(device));

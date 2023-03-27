@@ -276,6 +276,7 @@ enum ChannelId {
     LeftImage,
     RightImage,
     DepthImage,
+    PointCloud,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq, Default)]
@@ -284,6 +285,7 @@ pub struct Subscriptions {
     pub left_image: bool,
     pub right_image: bool,
     pub depth_image: bool,
+    pub point_cloud: bool,
 }
 
 impl State {
@@ -333,6 +335,14 @@ impl State {
             });
         } else {
             unsubs.push(ChannelId::DepthImage as u8);
+        }
+        if self.subscriptions.point_cloud {
+            subs.push(SubscriptionBodyRepresentation {
+                id: ChannelId::PointCloud as u8,
+                channelId: ChannelId::PointCloud as u8,
+            });
+        } else {
+            unsubs.push(ChannelId::PointCloud as u8);
         }
         let body = serde_json::to_string(&subs).unwrap().into_bytes();
 
@@ -386,6 +396,9 @@ impl State {
                 // TODO: Show toast if api error
                 match result {
                     Ok(devices) => {
+                        if devices.contains(&self.selected_device.unwrap_or_default().id) {
+                            self.selected_device = None;
+                        }
                         self.devices_available = Some(devices.clone());
                         re_log::info!("Devices: {:?}", devices);
                         if self.selected_device.is_none() {
@@ -407,14 +420,13 @@ impl State {
     }
 
     pub fn set_device(&mut self, device_id: DeviceId) {
-        re_log::info!("Setting device: {:?}", device_id);
         if let Some(current_device) = self.selected_device {
             if current_device.id == device_id {
                 return;
             }
         }
+        re_log::info!("Setting device: {:?}", device_id);
         if let Some(result) = self.api.select_device(&device_id) {
-            re_log::info!("Some result");
             if let Ok(device) = result {
                 re_log::info!("Device: {:?}", device.id);
                 self.selected_device = Some(device);

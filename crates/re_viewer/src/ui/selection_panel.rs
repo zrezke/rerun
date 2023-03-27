@@ -124,32 +124,34 @@ impl SelectionPanel {
         }
 
         let mut available_devices = ctx.depthai_state.get_devices();
-        let mut selected_device = ctx
+        let mut currently_selected_device = ctx
             .depthai_state
             .selected_device
             .clone()
             .unwrap_or_default();
-        if selected_device.id != -1 && available_devices.is_empty() {
-            available_devices.push(selected_device.id);
+        let mut combo_device: depthai::DeviceId = currently_selected_device.id;
+        if currently_selected_device.id != -1 && available_devices.is_empty() {
+            available_devices.push(currently_selected_device.id);
         }
 
         ui.horizontal(|ui| {
             ui.label("Device: ");
             egui::ComboBox::from_id_source("device")
                 .width(70.0)
-                .selected_text(if selected_device.id != -1 {
-                    selected_device.id.to_string()
+                .selected_text(if combo_device != -1 {
+                    combo_device.to_string()
                 } else {
                     "No device selected".to_string()
                 })
                 .show_ui(ui, |ui| {
                     for device in available_devices {
-                        ui.selectable_value(&mut selected_device.id, device, device.to_string());
+                        ui.selectable_value(&mut combo_device, device, device.to_string());
                     }
                 });
         });
-
-        ctx.depthai_state.selected_device = Some(selected_device);
+        if combo_device != -1 {
+            ctx.depthai_state.set_device(combo_device);
+        }
 
         if ctx
             .depthai_state
@@ -275,6 +277,9 @@ impl SelectionPanel {
                     });
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut subscriptions.depth_image, "Show Depth");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut subscriptions.point_cloud, "Show Point Cloud");
                     });
                 });
                 device_config.depth = Some(depth);
