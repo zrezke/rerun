@@ -20,6 +20,8 @@ impl Default for ApiError {
 pub struct Promises {
     pub get_devices: Option<Promise<Result<Vec<depthai::DeviceId>, ApiError>>>,
     select_device: Option<Promise<Result<depthai::Device, ApiError>>>,
+    subscribe: Option<Promise<Result<(), ApiError>>>,
+    unsubscribe: Option<Promise<Result<SubscriptionResponse, ApiError>>>,
 }
 
 #[derive(Default)]
@@ -28,6 +30,17 @@ pub struct Api {
 }
 
 struct DevicesResponseBody {}
+
+#[derive(serde::Serialize)]
+struct SubscriptionBodyRepresentation {
+    id: u8, // Made with foxglove in mind should be removed probably
+    channelId: u8,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct SubscriptionResponse {
+    subscriptions: Vec<u8>,
+}
 
 impl Api {
     pub fn get_devices(&mut self) -> Option<Result<Vec<depthai::DeviceId>, ApiError>> {
@@ -67,13 +80,21 @@ impl Api {
         device_id: &depthai::DeviceId,
     ) -> Option<Result<depthai::Device, ApiError>> {
         if self.pending.select_device.is_some() {
+            re_log::info!("Promise is some");
             let mut promise_ready = false;
-            if let Some(response) = self.pending.select_device.as_mut().unwrap().ready() {
+            if let Some(response) = self.pending.select_device.as_ref().unwrap().ready() {
                 promise_ready = true;
-                return Some(response.clone());
             }
             if promise_ready {
-                self.pending.select_device = None;
+                return Some(
+                    self.pending
+                        .select_device
+                        .take()
+                        .unwrap()
+                        .ready()
+                        .unwrap()
+                        .clone(),
+                );
             }
         }
         let (sender, promise) = Promise::new();
@@ -96,6 +117,131 @@ impl Api {
                 sender.send(Err(ApiError::default()));
             }
         });
+        None
+    }
+
+    pub fn set_subscriptions(
+        &mut self,
+        subscriptions: &depthai::Subscriptions,
+    ) -> Option<Result<&Vec<u8>, &ApiError>> {
+        if self.pending.subscribe.is_some() && self.pending.unsubscribe.is_some() {
+            let mut promises_ready = false;
+            if self.pending.subscribe.as_ref().unwrap().ready().is_some()
+                && self.pending.unsubscribe.as_ref().unwrap().ready().is_some()
+            {
+                promises_ready = true;
+            }
+            if promises_ready {
+                self.pending.subscribe = None;
+                let response = self
+                    .pending
+                    .unsubscribe
+                    .as_ref()
+                    .unwrap()
+                    .ready()
+                    .unwrap()
+                    .clone();
+
+                match response {
+                    Ok(response) => {
+                        re_log::info!("!In api: {:?}", response.subscriptions);
+                        return Some(Ok(&response.subscriptions));
+                    }
+                    Err(e) => {
+                        return Some(Err(e));
+                    }
+                }
+            }
+        }
+        let mut subs = Vec::new();
+        let mut unsubs = Vec::new();
+        re_log::info!("subscribe to color image: {:?}", subscriptions.color_image);
+        if subscriptions.color_image {
+            subs.push(SubscriptionBodyRepresentation {
+                id: depthai::ChannelId::ColorImage as u8, // Made with foxglove in mind
+                channelId: depthai::ChannelId::ColorImage as u8,
+            });
+        } else {
+            unsubs.push(depthai::ChannelId::ColorImage as u8);
+        }
+        if subscriptions.left_image {
+            subs.push(SubscriptionBodyRepresentation {
+                id: depthai::ChannelId::LeftImage as u8,
+                channelId: depthai::ChannelId::LeftImage as u8,
+            });
+        } else {
+            unsubs.push(depthai::ChannelId::LeftImage as u8);
+        }
+        if subscriptions.right_image {
+            subs.push(SubscriptionBodyRepresentation {
+                id: depthai::ChannelId::RightImage as u8,
+                channelId: depthai::ChannelId::RightImage as u8,
+            });
+        } else {
+            unsubs.push(depthai::ChannelId::RightImage as u8);
+        }
+        if subscriptions.depth_image {
+            subs.push(SubscriptionBodyRepresentation {
+                id: depthai::ChannelId::DepthImage as u8,
+                channelId: depthai::ChannelId::DepthImage as u8,
+            });
+        } else {
+            unsubs.push(depthai::ChannelId::DepthImage as u8);
+        }
+        if subscriptions.point_cloud {
+            subs.push(SubscriptionBodyRepresentation {
+                id: depthai::ChannelId::PointCloud as u8,
+                channelId: depthai::ChannelId::PointCloud as u8,
+            });
+        } else {
+            unsubs.push(depthai::ChannelId::PointCloud as u8);
+        }
+
+        let subscribe_body = serde_json::to_string(&subs).unwrap_or_default();
+        let (subscribe_sender, subscribe_promise) = Promise::new();
+        let subscribe_request = ehttp::Request::post(
+            format!("{DEPTHAI_API_URL}/subscribe"),
+            subscribe_body.into(),
+        );
+        ehttp::fetch(subscribe_request, move |response| {
+            if let Ok(response) = response {
+                let body = String::from(response.text().unwrap_or_default());
+                if response.ok {
+                    subscribe_sender.send(Ok(()));
+                } else {
+                    let error: ApiError = serde_json::from_str(&body).unwrap_or_default();
+                    subscribe_sender.send(Err(error));
+                }
+            } else {
+                subscribe_sender.send(Err(ApiError::default()))
+            }
+        });
+        self.pending.subscribe = Some(subscribe_promise);
+
+        let (unsubscribe_sender, unsubsribe_promise) = Promise::new();
+        let unsubscribe_body = serde_json::to_string(&unsubs).unwrap().into_bytes();
+        let unsubscribe_request = ehttp::Request::post(
+            format!("{DEPTHAI_API_URL}/unsubscribe"),
+            unsubscribe_body.into(),
+        );
+        ehttp::fetch(unsubscribe_request, move |response| {
+            if let Ok(response) = response {
+                let body = String::from(response.text().unwrap_or_default());
+                re_log::info!("Unsubscribe body: {:?}", body);
+                if response.ok {
+                    let active_subscriptions: SubscriptionResponse =
+                        serde_json::from_str(&body).unwrap_or_default();
+                    unsubscribe_sender.send(Ok(active_subscriptions))
+                } else {
+                    let error: ApiError = serde_json::from_str(&body).unwrap_or_default();
+                    unsubscribe_sender.send(Err(error))
+                }
+            } else {
+                unsubscribe_sender.send(Err(ApiError::default()))
+            }
+        });
+
+        self.pending.unsubscribe = Some(unsubsribe_promise);
         None
     }
 }

@@ -704,10 +704,11 @@ impl App {
         use re_format::format_bytes;
         use re_memory::MemoryUse;
 
-        if self.latest_memory_purge.elapsed() < instant::Duration::from_secs(10) {
-            // Pruning introduces stutter, and we don't want to stutter too often.
-            return;
-        }
+        // Purge memory as soon as it's over the limit
+        // if self.latest_memory_purge.elapsed() < instant::Duration::from_secs(10) {
+        //     // Pruning introduces stutter, and we don't want to stutter too often.
+        //     return;
+        // }
 
         let limit = self.startup_options.memory_limit;
         let mem_use_before = MemoryUse::capture();

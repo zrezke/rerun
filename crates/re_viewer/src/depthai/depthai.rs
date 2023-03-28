@@ -241,15 +241,13 @@ pub struct State {
     pub device_config: DeviceConfigState,
 
     #[serde(skip)] // Want to resubscribe to api when app is reloaded
-    pub subscriptions: Subscriptions,
-    #[serde(skip)]
-    pub subscribe_promise: Option<Promise<Result<(), ()>>>,
-    #[serde(skip)]
-    pub unsubscribe_promise: Option<Promise<Result<(), ()>>>,
+    pub subscriptions: Option<Subscriptions>, // Shown in ui
+    previous_subscriptions: Option<Subscriptions>, // Internal, used to recover previous subs and detect changes
+    setting_subscriptions: bool,
     #[serde(skip)]
     pub api: api::Api,
     #[serde(skip)]
-    poll_instant: Option<Instant>, // No default for Instant
+    poll_instant: Option<Instant>,
     #[serde(skip)]
     toasts: Toasts,
 }
@@ -260,18 +258,19 @@ impl Default for State {
             devices_available: None,
             selected_device: None,
             device_config: DeviceConfigState::default(),
-            subscriptions: Subscriptions::default(),
-            subscribe_promise: None,
-            unsubscribe_promise: None,
+            subscriptions: None,
+            previous_subscriptions: None,
+            setting_subscriptions: false,
             api: api::Api::default(),
-            poll_instant: Some(Instant::now()),
+            poll_instant: Some(Instant::now()), // No default for Instant
             toasts: Toasts::new(),
         }
     }
 }
 
 #[repr(u8)]
-enum ChannelId {
+#[derive(serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq, Eq, fmt::Debug)]
+pub enum ChannelId {
     ColorImage,
     LeftImage,
     RightImage,
@@ -279,7 +278,7 @@ enum ChannelId {
     PointCloud,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq, Eq, Default, fmt::Debug)]
 pub struct Subscriptions {
     pub color_image: bool,
     pub left_image: bool,
@@ -291,91 +290,38 @@ pub struct Subscriptions {
 impl State {
     /// Set subscriptions internally and send subscribe / unsubscribe requests to the api
     pub fn set_subscriptions(&mut self, subscriptions: &Subscriptions) {
-        if self.subscriptions == *subscriptions {
-            return;
-        }
-        self.subscriptions = *subscriptions;
-
-        #[derive(serde::Serialize)]
-        struct SubscriptionBodyRepresentation {
-            id: u8,
-            channelId: u8,
-        };
-
-        let mut subs = Vec::new();
-        let mut unsubs = Vec::new();
-        if self.subscriptions.color_image {
-            subs.push(SubscriptionBodyRepresentation {
-                id: ChannelId::ColorImage as u8, // Made with foxglove in mind
-                channelId: ChannelId::ColorImage as u8,
-            });
-        } else {
-            unsubs.push(ChannelId::ColorImage as u8);
-        }
-        if self.subscriptions.left_image {
-            subs.push(SubscriptionBodyRepresentation {
-                id: ChannelId::LeftImage as u8,
-                channelId: ChannelId::LeftImage as u8,
-            });
-        } else {
-            unsubs.push(ChannelId::LeftImage as u8);
-        }
-        if self.subscriptions.right_image {
-            subs.push(SubscriptionBodyRepresentation {
-                id: ChannelId::RightImage as u8,
-                channelId: ChannelId::RightImage as u8,
-            });
-        } else {
-            unsubs.push(ChannelId::RightImage as u8);
-        }
-        if self.subscriptions.depth_image {
-            subs.push(SubscriptionBodyRepresentation {
-                id: ChannelId::DepthImage as u8,
-                channelId: ChannelId::DepthImage as u8,
-            });
-        } else {
-            unsubs.push(ChannelId::DepthImage as u8);
-        }
-        if self.subscriptions.point_cloud {
-            subs.push(SubscriptionBodyRepresentation {
-                id: ChannelId::PointCloud as u8,
-                channelId: ChannelId::PointCloud as u8,
-            });
-        } else {
-            unsubs.push(ChannelId::PointCloud as u8);
-        }
-        let body = serde_json::to_string(&subs).unwrap().into_bytes();
-
-        let (subscribe_sender, subscribe_promise) = Promise::new();
-
-        let subscribe_request = ehttp::Request::post("http://localhost:8000/subscribe", body);
-
-        ehttp::fetch(subscribe_request, move |response| {
-            let response = response.unwrap();
-            let body = String::from(response.text().unwrap_or_default());
-            let json: PipelineResponse = serde_json::from_str(&body).unwrap_or_default();
-            if response.ok {
-                subscribe_sender.send(Ok(()));
-            } else {
-                subscribe_sender.send(Err(()));
+        if !self.setting_subscriptions {
+            if let Some(current) = self.subscriptions {
+                if current == *subscriptions {
+                    return;
+                }
             }
-        });
-
-        let (unsubscribe_sender, unsubsribe_promise) = Promise::new();
-        let body = serde_json::to_string(&unsubs).unwrap().into_bytes();
-        let unsubscribe_request = ehttp::Request::post("http://localhost:8000/unsubscribe", body);
-        ehttp::fetch(unsubscribe_request, move |response| {
-            let response = response.unwrap();
-            let body = String::from(response.text().unwrap_or_default());
-            let json: PipelineResponse = serde_json::from_str(&body).unwrap_or_default();
-            if response.ok {
-                unsubscribe_sender.send(Ok(()))
+            self.previous_subscriptions = self.subscriptions;
+            self.subscriptions = Some(*subscriptions);
+            self.setting_subscriptions = true;
+        }
+        if let Some(result) = self.api.set_subscriptions(subscriptions) {
+            if let Ok(active_subscriptions) = result {
+                re_log::info!("Active subscriptions: {:?}", active_subscriptions);
+                // log contains
+                re_log::info!(
+                    "Contains color image: {:?}",
+                    active_subscriptions.contains(&(ChannelId::ColorImage as u8))
+                );
+                let mut new_subscriptions = Subscriptions {
+                    color_image: active_subscriptions.contains(&(ChannelId::ColorImage as u8)),
+                    left_image: active_subscriptions.contains(&(ChannelId::LeftImage as u8)),
+                    right_image: active_subscriptions.contains(&(ChannelId::RightImage as u8)),
+                    depth_image: active_subscriptions.contains(&(ChannelId::DepthImage as u8)),
+                    point_cloud: active_subscriptions.contains(&(ChannelId::PointCloud as u8)),
+                };
+                self.subscriptions = Some(new_subscriptions);
+                self.setting_subscriptions = false;
             } else {
-                unsubscribe_sender.send(Err(()))
+                self.subscriptions = self.previous_subscriptions;
+                self.setting_subscriptions = false;
             }
-        });
-        self.subscribe_promise.insert(subscribe_promise);
-        self.unsubscribe_promise.insert(unsubsribe_promise);
+        }
     }
 
     pub fn get_devices(&mut self) -> Vec<DeviceId> {
@@ -387,7 +333,6 @@ impl State {
     }
 
     pub fn update(&mut self) {
-        // TODO: Make this async? only if you are a borrowing master
         if let Some(poll_instant) = self.poll_instant {
             if poll_instant.elapsed().as_secs() < 2 {
                 return;
@@ -396,9 +341,9 @@ impl State {
                 // TODO: Show toast if api error
                 match result {
                     Ok(devices) => {
-                        if devices.contains(&self.selected_device.unwrap_or_default().id) {
-                            self.selected_device = None;
-                        }
+                        // if devices.contains(&self.selected_device.unwrap_or_default().id) {
+                        //     self.selected_device = None;
+                        // }
                         self.devices_available = Some(devices.clone());
                         re_log::info!("Devices: {:?}", devices);
                         if self.selected_device.is_none() {
@@ -431,6 +376,7 @@ impl State {
                 re_log::info!("Device: {:?}", device.id);
                 self.selected_device = Some(device);
                 self.device_config = DeviceConfigState::default();
+                // self.api.configure_pipeline(self.device_config.config);
                 self.set_subscriptions(&Subscriptions::default());
             }
         }

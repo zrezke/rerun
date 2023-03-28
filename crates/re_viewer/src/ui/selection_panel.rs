@@ -165,7 +165,7 @@ impl SelectionPanel {
 
         // re_log::info!("pipeline_state: {:?}", pipeline_state);
         let mut device_config = ctx.depthai_state.device_config.config.clone();
-        let mut subscriptions = ctx.depthai_state.subscriptions.clone();
+        let mut subscriptions = ctx.depthai_state.subscriptions.unwrap_or_default().clone();
 
         ui.vertical(|ui| {
             ui.collapsing("Color Camera", |ui| {
