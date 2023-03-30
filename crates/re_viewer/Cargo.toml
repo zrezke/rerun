@@ -17,6 +17,7 @@ include = [
   "Cargo.toml",
   "data/*",
 ]
+resolver = "2"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -57,6 +58,10 @@ re_tensor_ops.workspace = true
 re_ui.workspace = true
 re_ws_comms = { workspace = true, features = ["client"] }
 serde_json="1"
+tokio = { workspace = true, default-features = false, features = [
+  "rt"
+] }
+ewebsock = { version = "0.2", optional = false }
 
 # Internal (optional):
 re_analytics = { workspace = true, optional = true }
@@ -66,6 +71,7 @@ re_analytics = { workspace = true, optional = true }
 ahash.workspace = true
 anyhow.workspace = true
 bytemuck = { version = "1.11", features = ["extern_crate_alloc"] }
+crossbeam-channel = "0.5.7"
 eframe = { workspace = true, default-features = false, features = [
   "default_fonts",
   "persistence",
@@ -105,6 +111,7 @@ thiserror.workspace = true
 uuid = { version = "1.1", features = ["serde", "v4", "js"] }
 vec1 = "1.8"
 wgpu.workspace = true
+url = "2.3.1"
 
 # native dependencies:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

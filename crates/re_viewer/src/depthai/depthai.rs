@@ -1,4 +1,5 @@
-use super::api;
+use super::api::BackendCommChannel;
+use super::ws::{BackWsMessage as WsMessage, WsMessageData, WsMessageType};
 use ahash::{HashMap, HashMapExt};
 use egui_notify::Toasts;
 use ehttp;
@@ -221,7 +222,7 @@ impl DeviceConfigState {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, fmt::Debug)]
 pub struct Device {
     pub id: DeviceId,
     // Add more fields later
@@ -245,7 +246,7 @@ pub struct State {
     previous_subscriptions: Option<Subscriptions>, // Internal, used to recover previous subs and detect changes
     setting_subscriptions: bool,
     #[serde(skip)]
-    pub api: api::Api,
+    pub backend_comms: BackendCommChannel,
     #[serde(skip)]
     poll_instant: Option<Instant>,
     #[serde(skip)]
@@ -261,7 +262,7 @@ impl Default for State {
             subscriptions: None,
             previous_subscriptions: None,
             setting_subscriptions: false,
-            api: api::Api::default(),
+            backend_comms: BackendCommChannel::default(),
             poll_instant: Some(Instant::now()), // No default for Instant
             toasts: Toasts::new(),
         }
@@ -287,41 +288,67 @@ pub struct Subscriptions {
     pub point_cloud: bool,
 }
 
+impl Subscriptions {
+    pub fn from_vec(vec: Vec<ChannelId>) -> Self {
+        let mut slf = Self::default();
+        for channel in vec {
+            match channel {
+                ChannelId::ColorImage => slf.color_image = true,
+                ChannelId::LeftImage => slf.left_image = true,
+                ChannelId::RightImage => slf.right_image = true,
+                ChannelId::DepthImage => slf.depth_image = true,
+                ChannelId::PointCloud => slf.point_cloud = true,
+            }
+        }
+        slf
+    }
+}
+
 impl State {
     /// Set subscriptions internally and send subscribe / unsubscribe requests to the api
+    // pub fn set_subscriptions(&mut self, subscriptions: &Subscriptions) {
+    //     if !self.setting_subscriptions {
+    //         if let Some(current) = self.subscriptions {
+    //             if current == *subscriptions {
+    //                 return;
+    //             }
+    //         }
+    //         self.previous_subscriptions = self.subscriptions;
+    //         self.subscriptions = Some(*subscriptions);
+    //         self.setting_subscriptions = true;
+    //     }
+    //     if let Some(result) = self.api.set_subscriptions(subscriptions) {
+    //         if let Ok(active_subscriptions) = result {
+    //             re_log::info!("Active subscriptions: {:?}", active_subscriptions);
+    //             // log contains
+    //             re_log::info!(
+    //                 "Contains color image: {:?}",
+    //                 active_subscriptions.contains(&(ChannelId::ColorImage as u8))
+    //             );
+    //             let mut new_subscriptions = Subscriptions {
+    //                 color_image: active_subscriptions.contains(&(ChannelId::ColorImage as u8)),
+    //                 left_image: active_subscriptions.contains(&(ChannelId::LeftImage as u8)),
+    //                 right_image: active_subscriptions.contains(&(ChannelId::RightImage as u8)),
+    //                 depth_image: active_subscriptions.contains(&(ChannelId::DepthImage as u8)),
+    //                 point_cloud: active_subscriptions.contains(&(ChannelId::PointCloud as u8)),
+    //             };
+    //             self.subscriptions = Some(new_subscriptions);
+    //             self.setting_subscriptions = false;
+    //         } else {
+    //             self.subscriptions = self.previous_subscriptions;
+    //             self.setting_subscriptions = false;
+    //         }
+    //     }
+    // }
+
     pub fn set_subscriptions(&mut self, subscriptions: &Subscriptions) {
-        if !self.setting_subscriptions {
-            if let Some(current) = self.subscriptions {
-                if current == *subscriptions {
-                    return;
-                }
-            }
-            self.previous_subscriptions = self.subscriptions;
-            self.subscriptions = Some(*subscriptions);
-            self.setting_subscriptions = true;
-        }
-        if let Some(result) = self.api.set_subscriptions(subscriptions) {
-            if let Ok(active_subscriptions) = result {
-                re_log::info!("Active subscriptions: {:?}", active_subscriptions);
-                // log contains
-                re_log::info!(
-                    "Contains color image: {:?}",
-                    active_subscriptions.contains(&(ChannelId::ColorImage as u8))
-                );
-                let mut new_subscriptions = Subscriptions {
-                    color_image: active_subscriptions.contains(&(ChannelId::ColorImage as u8)),
-                    left_image: active_subscriptions.contains(&(ChannelId::LeftImage as u8)),
-                    right_image: active_subscriptions.contains(&(ChannelId::RightImage as u8)),
-                    depth_image: active_subscriptions.contains(&(ChannelId::DepthImage as u8)),
-                    point_cloud: active_subscriptions.contains(&(ChannelId::PointCloud as u8)),
-                };
-                self.subscriptions = Some(new_subscriptions);
-                self.setting_subscriptions = false;
-            } else {
-                self.subscriptions = self.previous_subscriptions;
-                self.setting_subscriptions = false;
+        if let Some(current_subscriptions) = self.subscriptions {
+            if current_subscriptions == *subscriptions {
+                return;
             }
         }
+        self.backend_comms.set_subscriptions(subscriptions);
+        self.subscriptions = Some(*subscriptions);
     }
 
     pub fn get_devices(&mut self) -> Vec<DeviceId> {
@@ -333,31 +360,64 @@ impl State {
     }
 
     pub fn update(&mut self) {
+        if let Some(ws_message) = self.backend_comms.receive() {
+            re_log::info!("Received message: {:?}", ws_message);
+            match ws_message.data {
+                WsMessageData::Subscriptions(subscriptions) => {
+                    re_log::info!("Setting subscriptions");
+                    let mut subs = Subscriptions::default();
+                    for sub in subscriptions {
+                        match sub {
+                            ChannelId::ColorImage => subs.color_image = true,
+                            ChannelId::LeftImage => subs.left_image = true,
+                            ChannelId::RightImage => subs.right_image = true,
+                            ChannelId::DepthImage => subs.depth_image = true,
+                            ChannelId::PointCloud => subs.point_cloud = true,
+                        }
+                    }
+                    self.subscriptions = Some(subs);
+                }
+                WsMessageData::Devices(devices) => {
+                    re_log::info!("Setting devices...");
+                    self.devices_available = Some(devices);
+                }
+                WsMessageData::Pipeline(config) => {
+                    re_log::info!("Todo handle pipeline configs");
+                }
+                WsMessageData::Device(device) => {
+                    re_log::info!("Setting device");
+                    self.selected_device = Some(device);
+                }
+                _ => {}
+            }
+        }
+
         if let Some(poll_instant) = self.poll_instant {
             if poll_instant.elapsed().as_secs() < 2 {
                 return;
             }
-            if let Some(result) = self.api.get_devices() {
-                // TODO: Show toast if api error
-                match result {
-                    Ok(devices) => {
-                        // if devices.contains(&self.selected_device.unwrap_or_default().id) {
-                        //     self.selected_device = None;
-                        // }
-                        self.devices_available = Some(devices.clone());
-                        re_log::info!("Devices: {:?}", devices);
-                        if self.selected_device.is_none() {
-                            if devices.len() > 0 {
-                                self.set_device(*devices.first().unwrap());
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        re_log::info!("Toast?: {:?}", e.detail);
-                        // TODO: Add toasts (have to add toast to state to state or create internal representation and publish in state)
-                    }
-                }
-            }
+            self.backend_comms.get_devices();
+            // if let Some(result) = self.api.get_devices() {
+            //     // TODO: Show toast if api error
+            //     match result {
+            //         Ok(devices) => {
+            //             // if devices.contains(&self.selected_device.unwrap_or_default().id) {
+            //             //     self.selected_device = None;
+            //             // }
+            //             self.devices_available = Some(devices.clone());
+            //             re_log::info!("Devices: {:?}", devices);
+            //             if self.selected_device.is_none() {
+            //                 if devices.len() > 0 {
+            //                     self.set_device(*devices.first().unwrap());
+            //                 }
+            //             }
+            //         }
+            //         Err(e) => {
+            //             re_log::info!("Toast?: {:?}", e.detail);
+            //             // TODO: Add toasts (have to add toast to state to state or create internal representation and publish in state)
+            //         }
+            //     }
+            // }
             self.poll_instant = Some(Instant::now());
         } else {
             self.poll_instant = Some(Instant::now());
@@ -371,15 +431,17 @@ impl State {
             }
         }
         re_log::info!("Setting device: {:?}", device_id);
-        if let Some(result) = self.api.select_device(&device_id) {
-            if let Ok(device) = result {
-                re_log::info!("Device: {:?}", device.id);
-                self.selected_device = Some(device);
-                self.device_config = DeviceConfigState::default();
-                // self.api.configure_pipeline(self.device_config.config);
-                self.set_subscriptions(&Subscriptions::default());
-            }
-        }
+
+        self.backend_comms.set_device(device_id);
+        // if let Some(result) = self.api.select_device(&device_id) {
+        //     if let Ok(device) = result {
+        //         re_log::info!("Device: {:?}", device.id);
+        //         self.selected_device = Some(device);
+        //         self.device_config = DeviceConfigState::default();
+        //         // self.api.configure_pipeline(self.device_config.config);
+        //         self.set_subscriptions(&Subscriptions::default());
+        //     }
+        // }
     }
 }
 
