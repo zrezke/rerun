@@ -685,6 +685,7 @@ fn help_text_ui(ui: &mut egui::Ui, space_view: &SpaceView) {
         ViewCategory::BarChart => Some(crate::ui::view_bar_chart::HELP_TEXT),
         ViewCategory::Spatial => Some(space_view.view_state.state_spatial.help_text()),
         ViewCategory::Text | ViewCategory::Tensor => None,
+        ViewCategory::NodeGraph => None,
     };
 
     if let Some(help_text) = help_text {

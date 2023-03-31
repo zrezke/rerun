@@ -1,3 +1,4 @@
+use core::fmt;
 use std::{any::Any, hash::Hash};
 
 use ahash::HashMap;
@@ -18,6 +19,7 @@ use re_ui::Command;
 
 use crate::{
     app_icon::setup_app_icon,
+    depthai::depthai,
     misc::{AppOptions, Caches, RecordingConfig, ViewerContext},
     ui::{data_ui::ComponentUiRegistry, Blueprint},
     viewer_analytics::ViewerAnalytics,
@@ -408,7 +410,7 @@ impl eframe::App for App {
 
     fn update(&mut self, egui_ctx: &egui::Context, frame: &mut eframe::Frame) {
         let frame_start = Instant::now();
-
+        self.state.depthai_state.update(); // Always update depthai state
         if self.icon_status == AppIconStatus::NotSetTryAgain {
             self.icon_status = setup_app_icon();
         }
@@ -510,18 +512,14 @@ impl eframe::App for App {
                         .unwrap();
                     render_ctx.begin_frame();
 
-                    if log_db.is_empty() {
-                        wait_screen_ui(ui, &self.rx);
-                    } else {
-                        self.state.show(
-                            ui,
-                            render_ctx,
-                            log_db,
-                            &self.re_ui,
-                            &self.component_ui_registry,
-                            self.rx.source(),
-                        );
-                    }
+                    self.state.show(
+                        ui,
+                        render_ctx,
+                        log_db,
+                        &self.re_ui,
+                        &self.component_ui_registry,
+                        self.rx.source(),
+                    );
 
                     render_ctx.before_submit();
                 }
@@ -545,6 +543,7 @@ impl eframe::App for App {
             egui_ctx.input(|i| i.time),
             frame_start.elapsed().as_secs_f32(),
         );
+        egui_ctx.request_repaint(); // Force repaint even when out of focus
     }
 }
 
@@ -705,10 +704,11 @@ impl App {
         use re_format::format_bytes;
         use re_memory::MemoryUse;
 
-        if self.latest_memory_purge.elapsed() < instant::Duration::from_secs(10) {
-            // Pruning introduces stutter, and we don't want to stutter too often.
-            return;
-        }
+        // Purge memory as soon as it's over the limit
+        // if self.latest_memory_purge.elapsed() < instant::Duration::from_secs(10) {
+        //     // Pruning introduces stutter, and we don't want to stutter too often.
+        //     return;
+        // }
 
         let limit = self.startup_options.memory_limit;
         let mem_use_before = MemoryUse::capture();
@@ -863,6 +863,15 @@ enum PanelSelection {
     EventLog,
 }
 
+impl fmt::Display for PanelSelection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PanelSelection::Viewport => write!(f, "Viewport"),
+            PanelSelection::EventLog => write!(f, "Event log"),
+        }
+    }
+}
+
 #[derive(Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct AppState {
@@ -891,6 +900,9 @@ struct AppState {
     #[cfg(not(target_arch = "wasm32"))]
     #[serde(skip)]
     profiler: crate::Profiler,
+
+    selected_device: depthai::DeviceId,
+    depthai_state: depthai::State,
 }
 
 impl AppState {
@@ -917,6 +929,8 @@ impl AppState {
             time_panel,
             #[cfg(not(target_arch = "wasm32"))]
                 profiler: _,
+            selected_device,
+            depthai_state,
         } = self;
 
         let rec_cfg =
@@ -935,6 +949,7 @@ impl AppState {
             rec_cfg,
             re_ui,
             render_ctx,
+            depthai_state,
         };
 
         let blueprint = blueprints.entry(selected_app_id.clone()).or_default();

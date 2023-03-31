@@ -30,6 +30,7 @@ mod linestrip;
 mod mat;
 mod mesh3d;
 mod msg_id;
+mod node_graph;
 mod point;
 mod quaternion;
 mod radius;
@@ -54,6 +55,7 @@ pub use linestrip::{LineStrip2D, LineStrip3D};
 pub use mat::Mat3x3;
 pub use mesh3d::{EncodedMesh3D, Mesh3D, MeshFormat, MeshId, RawMesh3D};
 pub use msg_id::MsgId;
+pub use node_graph::NodeGraph;
 pub use point::{Point2D, Point3D};
 pub use quaternion::Quaternion;
 pub use radius::Radius;
@@ -65,13 +67,14 @@ pub use tensor::TensorImageError;
 pub use tensor::{
     Tensor, TensorCastError, TensorData, TensorDataMeaning, TensorDimension, TensorId, TensorTrait,
 };
+
 pub use text_entry::TextEntry;
 pub use transform::{Pinhole, Rigid3, Transform};
 pub use vec::{Vec2D, Vec3D, Vec4D};
 
 lazy_static! {
     //TODO(john): use a run-time type registry
-    static ref FIELDS: [Field; 26] = [
+    static ref FIELDS: [Field; 27] = [
         <AnnotationContext as Component>::field(),
         <Arrow3D as Component>::field(),
         <Box3D as Component>::field(),
@@ -98,6 +101,7 @@ lazy_static! {
         <Vec2D as Component>::field(),
         <Vec3D as Component>::field(),
         <ViewCoordinates as Component>::field(),
+        <NodeGraph as Component>::field(),
     ];
 }
 
