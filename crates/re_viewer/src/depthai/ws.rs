@@ -49,20 +49,25 @@ async fn spawn_ws_client(
         .as_mut()
         {
             while error_rx.is_empty() {
-                if let Ok(message) = send_rx.recv() {
+                if shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+                    re_log::debug!("Shutting down websocket client");
+                    exit(0);
+                }
+                if let Ok(message) = send_rx.recv_timeout(std::time::Duration::from_millis(100)) {
                     sender.send(message);
                 }
             }
             for error in error_rx.try_iter() {
-                re_log::error!("Websocket error: {:?}", error);
+                re_log::debug!("Websocket error: {:?}", error);
             }
         } else {
             re_log::error!("Coudln't create websocket");
         }
-        if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+        re_log::info!("Websocket closed, retrying in 1 second");
+        if shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+            re_log::debug!("Shutting down websocket client");
             exit(0);
         }
-        std::thread::sleep(std::time::Duration::from_secs(1));
     }
 }
 
@@ -149,6 +154,7 @@ pub struct WebSocket {
     receiver: crossbeam_channel::Receiver<WsMessage>,
     sender: crossbeam_channel::Sender<WsMessage>,
     shutdown: Arc<AtomicBool>,
+    task: tokio::task::JoinHandle<()>,
 }
 
 impl Default for WebSocket {
@@ -163,17 +169,18 @@ impl WebSocket {
         let (send_tx, send_rx) = crossbeam_channel::unbounded();
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown.clone();
-        tokio::spawn(spawn_ws_client(recv_tx, send_rx, shutdown_clone));
+        let task = tokio::spawn(spawn_ws_client(recv_tx, send_rx, shutdown_clone));
         Self {
             receiver: recv_rx,
             sender: send_tx,
             shutdown,
+            task,
         }
     }
 
     pub fn shutdown(&mut self) {
         self.shutdown
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub fn receive(&self) -> Option<BackWsMessage> {
