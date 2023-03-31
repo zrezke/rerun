@@ -1,6 +1,5 @@
 use super::depthai;
 use super::ws::{BackWsMessage as WsMessage, WebSocket, WsMessageData, WsMessageType};
-use poll_promise::Promise;
 use serde::{Deserialize, Serialize};
 
 const DEPTHAI_API_URL: &str = "http://localhost:8000";
@@ -24,6 +23,9 @@ pub struct BackendCommChannel {
 }
 
 impl BackendCommChannel {
+    pub fn shutdown(&mut self) {
+        self.ws.shutdown();
+    }
     pub fn set_subscriptions(&mut self, subscriptions: &depthai::Subscriptions) {
         let mut subs = Vec::new();
 

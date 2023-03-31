@@ -1,12 +1,8 @@
 use super::api::BackendCommChannel;
 use super::ws::{BackWsMessage as WsMessage, WsMessageData, WsMessageType};
-use ahash::{HashMap, HashMapExt};
-use egui_notify::Toasts;
-use ehttp;
-use poll_promise::Promise;
+use std::fmt;
 use std::sync::mpsc::channel;
-use std::time::{Duration, Instant};
-use std::{fmt, future::Future};
+use std::time::Instant;
 
 #[derive(serde::Deserialize, serde::Serialize, fmt::Debug, PartialEq, Clone, Copy)]
 pub enum ColorCameraResolution {
@@ -127,6 +123,7 @@ impl fmt::Display for DepthProfilePreset {
     }
 }
 
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
 pub enum DepthMedianFilter {
     MEDIAN_OFF,
     KERNEL_3x3,
@@ -144,6 +141,7 @@ impl Default for DepthMedianFilter {
 pub struct DepthConfig {
     // pub default_profile_preset: DepthProfilePreset,
     // TODO:(filip) add a legit depth config, when sdk is more defined
+    pub median: DepthMedianFilter,
 }
 
 #[derive(Default, serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
@@ -211,8 +209,6 @@ pub struct State {
     pub backend_comms: BackendCommChannel,
     #[serde(skip)]
     poll_instant: Option<Instant>,
-    #[serde(skip)]
-    toasts: Toasts,
 }
 
 impl Default for State {
@@ -226,7 +222,6 @@ impl Default for State {
             setting_subscriptions: false,
             backend_comms: BackendCommChannel::default(),
             poll_instant: Some(Instant::now()), // No default for Instant
-            toasts: Toasts::new(),
         }
     }
 }
@@ -275,7 +270,6 @@ impl State {
                 return;
             }
         }
-        re_log::info!("Setting subs again?");
         self.backend_comms.set_subscriptions(subscriptions);
         self.subscriptions = Some(*subscriptions);
     }
@@ -288,12 +282,16 @@ impl State {
         Vec::new()
     }
 
+    pub fn shutdown(&mut self) {
+        self.backend_comms.shutdown();
+    }
+
     pub fn update(&mut self) {
         if let Some(ws_message) = self.backend_comms.receive() {
-            re_log::info!("Received message: {:?}", ws_message);
+            re_log::debug!("Received message: {:?}", ws_message);
             match ws_message.data {
                 WsMessageData::Subscriptions(subscriptions) => {
-                    re_log::info!("Setting subscriptions");
+                    re_log::debug!("Setting subscriptions");
                     let mut subs = Subscriptions::default();
                     for sub in subscriptions {
                         match sub {
@@ -306,19 +304,19 @@ impl State {
                         }
                     }
                     self.subscriptions = Some(subs);
-                    re_log::info!("Set subscriptions: {:?}", subs);
+                    re_log::debug!("Set subscriptions: {:?}", subs);
                 }
                 WsMessageData::Devices(devices) => {
-                    re_log::info!("Setting devices...");
+                    re_log::debug!("Setting devices...");
                     self.devices_available = Some(devices);
                 }
                 WsMessageData::Pipeline(config) => {
-                    re_log::info!("Todo handle pipeline configs");
+                    re_log::debug!("Todo handle pipeline configs");
                     self.device_config.config = config;
                     self.device_config.update_in_progress = false;
                 }
                 WsMessageData::Device(device) => {
-                    re_log::info!("Setting device");
+                    re_log::debug!("Setting device");
                     self.selected_device = Some(device);
                 }
                 _ => {}
@@ -342,7 +340,7 @@ impl State {
                 return;
             }
         }
-        re_log::info!("Setting device: {:?}", device_id);
+        re_log::debug!("Setting device: {:?}", device_id);
         self.backend_comms.set_device(device_id);
     }
 

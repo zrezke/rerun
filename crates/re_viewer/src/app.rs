@@ -259,6 +259,7 @@ impl App {
             }
             #[cfg(not(target_arch = "wasm32"))]
             Command::Quit => {
+                self.state.depthai_state.shutdown();
                 _frame.close();
             }
 
@@ -413,6 +414,12 @@ impl eframe::App for App {
         [0.0; 4] // transparent so we can get rounded corners when doing [`re_ui::CUSTOM_WINDOW_DECORATIONS`]
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn on_close_event(&mut self) -> bool {
+        self.state.depthai_state.shutdown();
+        true
+    }
+
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, &self.state);
     }
@@ -431,6 +438,7 @@ impl eframe::App for App {
         }
 
         if self.shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            self.state.depthai_state.shutdown();
             #[cfg(not(target_arch = "wasm32"))]
             frame.close();
             return;
