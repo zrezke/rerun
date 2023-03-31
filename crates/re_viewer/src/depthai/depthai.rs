@@ -142,7 +142,8 @@ impl Default for DepthMedianFilter {
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, Default)]
 pub struct DepthConfig {
-    pub default_profile_preset: DepthProfilePreset,
+    // pub default_profile_preset: DepthProfilePreset,
+    // TODO:(filip) add a legit depth config, when sdk is more defined
 }
 
 #[derive(Default, serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
@@ -150,25 +151,14 @@ pub struct DeviceConfig {
     pub color_camera: ColorCameraConfig,
     pub left_camera: MonoCameraConfig,
     pub right_camera: MonoCameraConfig,
-    pub depth_enabled: bool,
     pub depth: Option<DepthConfig>,
-}
-
-#[derive(fmt::Debug, Clone)]
-pub struct PipelineState {
-    pub started: bool,
-    pub message: String,
 }
 
 #[derive(Default, serde::Deserialize, serde::Serialize)]
 pub struct DeviceConfigState {
     pub config: DeviceConfig,
-
-    // Is there a nicer way to handle promises?
     #[serde(skip)]
-    pub config_update_promise: Option<Promise<Option<PipelineState>>>,
-    #[serde(skip)]
-    pub pipeline_state: Option<PipelineState>,
+    pub update_in_progress: bool,
 }
 
 impl fmt::Debug for DeviceConfig {
@@ -191,34 +181,6 @@ impl Default for PipelineResponse {
         Self {
             message: "Pipeline not started".to_string(),
         }
-    }
-}
-
-impl DeviceConfigState {
-    pub fn set(&mut self, config: &DeviceConfig) {
-        if self.config == *config {
-            return;
-        }
-        self.config = *config;
-        self.config.left_camera.board_socket = BoardSocket::LEFT;
-        self.config.right_camera.board_socket = BoardSocket::RIGHT;
-
-        self.config_update_promise.get_or_insert_with(|| {
-            let (sender, promise) = Promise::new();
-            let body = serde_json::to_string(&self.config).unwrap().into_bytes();
-            let request = ehttp::Request::post("http://localhost:8000/pipeline", body);
-            ehttp::fetch(request, move |response| {
-                let response = response.unwrap(); // TODO(filip): Handle error
-                let body = String::from(response.text().unwrap_or_default());
-                let json: PipelineResponse = serde_json::from_str(&body).unwrap_or_default();
-                let pipeline_state = PipelineState {
-                    started: response.ok,
-                    message: json.message,
-                };
-                sender.send(Some(pipeline_state))
-            });
-            promise
-        });
     }
 }
 
@@ -273,10 +235,11 @@ impl Default for State {
 #[derive(serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq, Eq, fmt::Debug)]
 pub enum ChannelId {
     ColorImage,
-    LeftImage,
-    RightImage,
+    LeftMono,
+    RightMono,
     DepthImage,
     PointCloud,
+    PinholeCamera,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq, Eq, Default, fmt::Debug)]
@@ -294,10 +257,11 @@ impl Subscriptions {
         for channel in vec {
             match channel {
                 ChannelId::ColorImage => slf.color_image = true,
-                ChannelId::LeftImage => slf.left_image = true,
-                ChannelId::RightImage => slf.right_image = true,
+                ChannelId::LeftMono => slf.left_image = true,
+                ChannelId::RightMono => slf.right_image = true,
                 ChannelId::DepthImage => slf.depth_image = true,
                 ChannelId::PointCloud => slf.point_cloud = true,
+                _ => {}
             }
         }
         slf
@@ -305,48 +269,13 @@ impl Subscriptions {
 }
 
 impl State {
-    /// Set subscriptions internally and send subscribe / unsubscribe requests to the api
-    // pub fn set_subscriptions(&mut self, subscriptions: &Subscriptions) {
-    //     if !self.setting_subscriptions {
-    //         if let Some(current) = self.subscriptions {
-    //             if current == *subscriptions {
-    //                 return;
-    //             }
-    //         }
-    //         self.previous_subscriptions = self.subscriptions;
-    //         self.subscriptions = Some(*subscriptions);
-    //         self.setting_subscriptions = true;
-    //     }
-    //     if let Some(result) = self.api.set_subscriptions(subscriptions) {
-    //         if let Ok(active_subscriptions) = result {
-    //             re_log::info!("Active subscriptions: {:?}", active_subscriptions);
-    //             // log contains
-    //             re_log::info!(
-    //                 "Contains color image: {:?}",
-    //                 active_subscriptions.contains(&(ChannelId::ColorImage as u8))
-    //             );
-    //             let mut new_subscriptions = Subscriptions {
-    //                 color_image: active_subscriptions.contains(&(ChannelId::ColorImage as u8)),
-    //                 left_image: active_subscriptions.contains(&(ChannelId::LeftImage as u8)),
-    //                 right_image: active_subscriptions.contains(&(ChannelId::RightImage as u8)),
-    //                 depth_image: active_subscriptions.contains(&(ChannelId::DepthImage as u8)),
-    //                 point_cloud: active_subscriptions.contains(&(ChannelId::PointCloud as u8)),
-    //             };
-    //             self.subscriptions = Some(new_subscriptions);
-    //             self.setting_subscriptions = false;
-    //         } else {
-    //             self.subscriptions = self.previous_subscriptions;
-    //             self.setting_subscriptions = false;
-    //         }
-    //     }
-    // }
-
     pub fn set_subscriptions(&mut self, subscriptions: &Subscriptions) {
         if let Some(current_subscriptions) = self.subscriptions {
             if current_subscriptions == *subscriptions {
                 return;
             }
         }
+        re_log::info!("Setting subs again?");
         self.backend_comms.set_subscriptions(subscriptions);
         self.subscriptions = Some(*subscriptions);
     }
@@ -369,13 +298,15 @@ impl State {
                     for sub in subscriptions {
                         match sub {
                             ChannelId::ColorImage => subs.color_image = true,
-                            ChannelId::LeftImage => subs.left_image = true,
-                            ChannelId::RightImage => subs.right_image = true,
+                            ChannelId::LeftMono => subs.left_image = true,
+                            ChannelId::RightMono => subs.right_image = true,
                             ChannelId::DepthImage => subs.depth_image = true,
                             ChannelId::PointCloud => subs.point_cloud = true,
+                            _ => {} // Ignore pinhole camera
                         }
                     }
                     self.subscriptions = Some(subs);
+                    re_log::info!("Set subscriptions: {:?}", subs);
                 }
                 WsMessageData::Devices(devices) => {
                     re_log::info!("Setting devices...");
@@ -383,6 +314,8 @@ impl State {
                 }
                 WsMessageData::Pipeline(config) => {
                     re_log::info!("Todo handle pipeline configs");
+                    self.device_config.config = config;
+                    self.device_config.update_in_progress = false;
                 }
                 WsMessageData::Device(device) => {
                     re_log::info!("Setting device");
@@ -397,27 +330,6 @@ impl State {
                 return;
             }
             self.backend_comms.get_devices();
-            // if let Some(result) = self.api.get_devices() {
-            //     // TODO: Show toast if api error
-            //     match result {
-            //         Ok(devices) => {
-            //             // if devices.contains(&self.selected_device.unwrap_or_default().id) {
-            //             //     self.selected_device = None;
-            //             // }
-            //             self.devices_available = Some(devices.clone());
-            //             re_log::info!("Devices: {:?}", devices);
-            //             if self.selected_device.is_none() {
-            //                 if devices.len() > 0 {
-            //                     self.set_device(*devices.first().unwrap());
-            //                 }
-            //             }
-            //         }
-            //         Err(e) => {
-            //             re_log::info!("Toast?: {:?}", e.detail);
-            //             // TODO: Add toasts (have to add toast to state to state or create internal representation and publish in state)
-            //         }
-            //     }
-            // }
             self.poll_instant = Some(Instant::now());
         } else {
             self.poll_instant = Some(Instant::now());
@@ -431,17 +343,18 @@ impl State {
             }
         }
         re_log::info!("Setting device: {:?}", device_id);
-
         self.backend_comms.set_device(device_id);
-        // if let Some(result) = self.api.select_device(&device_id) {
-        //     if let Ok(device) = result {
-        //         re_log::info!("Device: {:?}", device.id);
-        //         self.selected_device = Some(device);
-        //         self.device_config = DeviceConfigState::default();
-        //         // self.api.configure_pipeline(self.device_config.config);
-        //         self.set_subscriptions(&Subscriptions::default());
-        //     }
-        // }
+    }
+
+    pub fn set_device_config(&mut self, config: &mut DeviceConfig) {
+        config.left_camera.board_socket = BoardSocket::LEFT;
+        config.right_camera.board_socket = BoardSocket::RIGHT;
+        if self.device_config.config == *config {
+            return;
+        }
+        self.device_config.config = *config;
+        self.backend_comms.set_pipeline(&self.device_config.config);
+        self.device_config.update_in_progress = true;
     }
 }
 

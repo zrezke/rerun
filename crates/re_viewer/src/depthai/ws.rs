@@ -129,7 +129,7 @@ impl<'de> Deserialize<'de> for BackWsMessage {
                 WsMessageData::Device(serde_json::from_value(message.data).unwrap_or_default())
             }
             WsMessageType::Pipeline => {
-                WsMessageData::Pipeline(serde_json::from_value(message.data).unwrap_or_default())
+                WsMessageData::Pipeline(serde_json::from_value(message.data).unwrap())
             }
             WsMessageType::Error => {
                 WsMessageData::Error(serde_json::from_value(message.data).unwrap_or_default())

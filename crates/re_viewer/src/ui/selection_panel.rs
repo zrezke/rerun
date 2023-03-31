@@ -106,23 +106,6 @@ impl SelectionPanel {
     }
 
     fn device_configuration_ui(&mut self, ui: &mut egui::Ui, ctx: &mut ViewerContext<'_>) {
-        // This block handles resetting the depthai_config_state.config_update_promise once it has finished
-        // It sets the pipeline state and clears the promise
-        let pipeline_state: Option<depthai::PipelineState> =
-            match ctx.depthai_state.device_config.config_update_promise {
-                Some(ref mut promise) => match promise.ready() {
-                    Some(result) => result.as_ref().and_then(|val| Some(val.clone())),
-                    None => None,
-                },
-                None => None,
-            };
-        if pipeline_state.is_some() {
-            ctx.depthai_state.device_config.pipeline_state =
-                Some(pipeline_state.as_ref().unwrap().clone());
-            ctx.depthai_state.device_config.config_update_promise =
-                None::<Promise<Option<depthai::PipelineState>>>;
-        }
-
         let mut available_devices = ctx.depthai_state.get_devices();
         let mut currently_selected_device = ctx
             .depthai_state
@@ -153,12 +136,7 @@ impl SelectionPanel {
             ctx.depthai_state.set_device(combo_device);
         }
 
-        if ctx
-            .depthai_state
-            .device_config
-            .config_update_promise
-            .is_some()
-        {
+        if ctx.depthai_state.device_config.update_in_progress {
             ui.add(egui::Spinner::new());
             return;
         }
@@ -166,7 +144,7 @@ impl SelectionPanel {
         // re_log::info!("pipeline_state: {:?}", pipeline_state);
         let mut device_config = ctx.depthai_state.device_config.config.clone();
         let mut subscriptions = ctx.depthai_state.subscriptions.unwrap_or_default().clone();
-
+        let mut depth_enabled = device_config.depth.is_some();
         ui.vertical(|ui| {
             ui.collapsing("Color Camera", |ui| {
                 ui.vertical(|ui| {
@@ -245,49 +223,43 @@ impl SelectionPanel {
                     });
                 });
             });
-            let depth_enabled_label = if device_config.depth_enabled {
-                "Disable Depth"
-            } else {
-                "Enable depth"
-            };
-            ui.collapsing("Depth", |ui| {
-                ui.checkbox(&mut device_config.depth_enabled, depth_enabled_label);
-                if !device_config.depth_enabled {
-                    return;
-                }
-                let mut depth = device_config.depth.unwrap_or_default();
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Default profile preset:");
-                        egui::ComboBox::from_id_source("depth_default_profile_preset")
-                            .width(70.0)
-                            .selected_text(format!("{}", depth.default_profile_preset))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut depth.default_profile_preset,
-                                    depthai::DepthProfilePreset::HIGH_DENSITY,
-                                    "High Density",
-                                );
-                                ui.selectable_value(
-                                    &mut depth.default_profile_preset,
-                                    depthai::DepthProfilePreset::HIGH_ACCURACY,
-                                    "High Accuracy",
-                                );
-                            })
+            ui.checkbox(&mut depth_enabled, "Depth");
+            if depth_enabled {
+                ui.collapsing("Depth", |ui| {
+                    let mut depth = device_config.depth.unwrap_or_default();
+                    ui.vertical(|ui| {
+                        // ui.horizontal(|ui| {
+                        //     ui.label("Default profile preset:");
+                        //     egui::ComboBox::from_id_source("depth_default_profile_preset")
+                        //         .width(70.0)
+                        //         .selected_text(format!("{}", depth.default_profile_preset))
+                        //         .show_ui(ui, |ui| {
+                        //             ui.selectable_value(
+                        //                 &mut depth.default_profile_preset,
+                        //                 depthai::DepthProfilePreset::HIGH_DENSITY,
+                        //                 "High Density",
+                        //             );
+                        //             ui.selectable_value(
+                        //                 &mut depth.default_profile_preset,
+                        //                 depthai::DepthProfilePreset::HIGH_ACCURACY,
+                        //                 "High Accuracy",
+                        //             );
+                        //         })
+                        // });
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut subscriptions.depth_image, "Show Depth");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut subscriptions.point_cloud, "Show Point Cloud");
+                        });
                     });
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut subscriptions.depth_image, "Show Depth");
-                    });
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut subscriptions.point_cloud, "Show Point Cloud");
-                    });
+                    device_config.depth = Some(depth);
                 });
-                device_config.depth = Some(depth);
-            });
+            }
         });
 
         ctx.depthai_state.set_subscriptions(&subscriptions);
-        ctx.depthai_state.device_config.set(&device_config);
+        ctx.depthai_state.set_device_config(&mut device_config);
     }
 
     #[allow(clippy::unused_self)]
