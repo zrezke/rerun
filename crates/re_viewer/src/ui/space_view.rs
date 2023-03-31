@@ -1,5 +1,6 @@
 use re_arrow_store::Timeline;
 use re_data_store::{EntityPath, EntityTree, InstancePath, TimeInt};
+use re_renderer::{GpuReadbackIdentifier, ScreenshotProcessor};
 
 use crate::{
     misc::{space_info::SpaceInfoCollection, SpaceViewHighlights, TransformCache, ViewerContext},
@@ -28,9 +29,23 @@ impl SpaceViewId {
     pub fn random() -> Self {
         Self(uuid::Uuid::new_v4())
     }
+
+    pub fn gpu_readback_id(self) -> GpuReadbackIdentifier {
+        re_log_types::hash::Hash64::hash(self).hash64()
+    }
 }
 
 // ----------------------------------------------------------------------------
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+#[allow(dead_code)] // Not used on the web.
+pub enum ScreenshotMode {
+    /// The screenshot will be saved to disc and copied to the clipboard.
+    SaveAndCopyToClipboard,
+
+    /// The screenshot will be copied to the clipboard.
+    CopyToClipboard,
+}
 
 /// A view of a space.
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
@@ -63,12 +78,11 @@ impl SpaceView {
         space_path: &EntityPath,
         queries_entities: &[EntityPath],
     ) -> Self {
-        let display_name = if queries_entities.len() == 1 {
-            // A single entity in this space-view - name the space after it.
-            queries_entities[0]
-                .last()
-                .map_or_else(|| "/".to_owned(), |part| part.to_string())
-        } else if let Some(name) = space_path.iter().last() {
+        // We previously named the [`SpaceView`] after the [`EntityPath`] if there was only a single entity. However,
+        // this led to somewhat confusing and inconsistent behavior. See https://github.com/rerun-io/rerun/issues/1220
+        // Spaces are now always named after the final element of the space-path (or the root), independent of the
+        // query entities.
+        let display_name = if let Some(name) = space_path.iter().last() {
             name.to_string()
         } else {
             // Include category name in the display for root paths because they look a tad bit too short otherwise.
@@ -103,6 +117,55 @@ impl SpaceView {
                 default_queried_entities(ctx, &self.space_path, spaces_info, self.category);
             self.data_blueprint
                 .insert_entities_according_to_hierarchy(queries_entities.iter(), &self.space_path);
+        }
+
+        while ScreenshotProcessor::next_readback_result(
+            ctx.render_ctx,
+            self.id.gpu_readback_id(),
+            |data, extent, mode| self.handle_pending_screenshots(data, extent, mode),
+        )
+        .is_some()
+        {}
+    }
+
+    fn handle_pending_screenshots(&self, data: &[u8], extent: glam::UVec2, mode: ScreenshotMode) {
+        // Set to clipboard.
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::misc::Clipboard::with(|clipboard| {
+            clipboard.set_image([extent.x as _, extent.y as _], data);
+        });
+        if mode == ScreenshotMode::CopyToClipboard {
+            return;
+        }
+
+        // Get next available file name.
+        let safe_display_name = self
+            .display_name
+            .replace(|c: char| !c.is_alphanumeric() && c != ' ', "");
+        let mut i = 1;
+        let filename = loop {
+            let filename = format!("Screenshot {safe_display_name} - {i}.png");
+            if !std::path::Path::new(&filename).exists() {
+                break filename;
+            }
+            i += 1;
+        };
+        let filename = std::path::Path::new(&filename);
+
+        match image::save_buffer(filename, data, extent.x, extent.y, image::ColorType::Rgba8) {
+            Ok(_) => {
+                re_log::info!(
+                    "Saved screenshot to {:?}.",
+                    filename.canonicalize().unwrap_or(filename.to_path_buf())
+                );
+            }
+            Err(err) => {
+                re_log::error!(
+                    "Failed to safe screenshot to {:?}: {}",
+                    filename.canonicalize().unwrap_or(filename.to_path_buf()),
+                    err
+                );
+            }
         }
     }
 
@@ -144,6 +207,11 @@ impl SpaceView {
         highlights: &SpaceViewHighlights,
     ) {
         crate::profile_function!();
+
+        let is_zero_sized_viewport = ui.available_size().min_elem() <= 0.0;
+        if is_zero_sized_viewport {
+            return;
+        }
 
         let query = crate::ui::scene::SceneQuery {
             entity_paths: self.data_blueprint.entity_paths(),

@@ -6,8 +6,8 @@ use macaw::{vec3, BoundingBox, Quat, Vec3};
 use re_data_store::{InstancePath, InstancePathHash};
 use re_log_types::{EntityPath, ViewCoordinates};
 use re_renderer::{
-    view_builder::{Projection, TargetConfiguration},
-    RenderContext, Size,
+    view_builder::{Projection, TargetConfiguration, ViewBuilder},
+    Size,
 };
 
 use crate::{
@@ -16,9 +16,11 @@ use crate::{
         data_ui::{self, DataUi},
         view_spatial::{
             scene::AdditionalPickingInfo,
-            ui::{create_labels, outline_config},
-            ui_renderer_bridge::{create_scene_paint_callback, get_viewport, ScreenBackground},
-            SceneSpatial, SpaceCamera3D,
+            ui::{create_labels, outline_config, screenshot_context_menu, PICKING_RECT_SIZE},
+            ui_renderer_bridge::{
+                fill_view_builder, get_viewport, renderer_paint_callback, ScreenBackground,
+            },
+            SceneSpatial, SpaceCamera3D, SpatialNavigationMode,
         },
         SpaceViewId, UiVerbosity,
     },
@@ -83,7 +85,7 @@ impl Default for View3DState {
 
 impl View3DState {
     pub fn reset_camera(&mut self, scene_bbox_accum: &BoundingBox) {
-        self.interpolate_to_eye(default_eye(scene_bbox_accum, &self.space_specs).to_eye());
+        self.interpolate_to_orbit_eye(default_eye(scene_bbox_accum, &self.space_specs));
         self.tracked_camera = None;
         self.camera_before_tracked_camera = None;
     }
@@ -143,6 +145,11 @@ impl View3DState {
             } else {
                 self.eye_interpolation = None;
             }
+
+            if 1.0 <= t {
+                // We have arrived at our target
+                self.eye_interpolation = None;
+            }
         }
 
         orbit_camera
@@ -151,6 +158,7 @@ impl View3DState {
     fn interpolate_to_eye(&mut self, target: Eye) {
         if let Some(start) = self.orbit_eye {
             let target_time = EyeInterpolation::target_time(&start.to_eye(), &target);
+            self.spin = false; // the user wants to move the camera somewhere, so stop spinning
             self.eye_interpolation = Some(EyeInterpolation {
                 elapsed_time: 0.0,
                 target_time,
@@ -166,6 +174,7 @@ impl View3DState {
     fn interpolate_to_orbit_eye(&mut self, target: OrbitEye) {
         if let Some(start) = self.orbit_eye {
             let target_time = EyeInterpolation::target_time(&start.to_eye(), &target.to_eye());
+            self.spin = false; // the user wants to move the camera somewhere, so stop spinning
             self.eye_interpolation = Some(EyeInterpolation {
                 elapsed_time: 0.0,
                 target_time,
@@ -235,7 +244,7 @@ fn find_camera(space_cameras: &[SpaceCamera3D], needle: &InstancePathHash) -> Op
 
 pub const HELP_TEXT_3D: &str = "Drag to rotate.\n\
     Drag with secondary mouse button to pan.\n\
-    Drag with middle mouse button to roll the view.\n\
+    Drag with middle mouse button (or primary mouse button + holding SHIFT) to roll the view.\n\
     Scroll to zoom.\n\
     \n\
     While hovering the 3D view, navigate with WSAD and QE.\n\
@@ -262,6 +271,10 @@ pub fn view_3d(
 
     let (rect, mut response) =
         ui.allocate_at_least(ui.available_size(), egui::Sense::click_and_drag());
+
+    if !rect.is_positive() {
+        return; // protect against problems with zero-sized views
+    }
 
     // If we're tracking a camera right now, we want to make it slightly sticky,
     // so that a click on some entity doesn't immediately break the tracked state.
@@ -298,6 +311,39 @@ pub fn view_3d(
         }
     }
 
+    // Determine view port resolution and position.
+    let resolution_in_pixel = get_viewport(rect, ui.ctx().pixels_per_point());
+    if resolution_in_pixel[0] == 0 || resolution_in_pixel[1] == 0 {
+        return;
+    }
+
+    let target_config = TargetConfiguration {
+        name: space.to_string().into(),
+
+        resolution_in_pixel,
+
+        view_from_world: eye.world_from_view.inverse(),
+        projection_from_view: Projection::Perspective {
+            vertical_fov: eye.fov_y.unwrap(),
+            near_plane_distance: eye.near(),
+        },
+
+        pixels_from_point: ui.ctx().pixels_per_point(),
+        auto_size_config: state.auto_size_config(),
+
+        outline_config: scene
+            .primitives
+            .any_outlines
+            .then(|| outline_config(ui.ctx())),
+    };
+
+    let mut view_builder = ViewBuilder::default();
+    // TODO(andreas): separate setup_view doesn't make sense, add a `new` method instead.
+    if let Err(err) = view_builder.setup_view(ctx.render_ctx, target_config) {
+        re_log::error!("Failed to setup view: {}", err);
+        return;
+    }
+
     // Create labels now since their shapes participate are added to scene.ui for picking.
     let label_shapes = create_labels(
         &mut scene.ui,
@@ -306,13 +352,38 @@ pub fn view_3d(
         &eye,
         ui,
         highlights,
+        SpatialNavigationMode::ThreeD,
     );
+
+    let should_do_hovering = !re_ui::egui_helpers::is_anything_being_dragged(ui.ctx());
 
     // TODO(andreas): We're very close making the hover reaction of ui2d and ui3d the same. Finish the job!
     // Check if we're hovering any hover primitive.
-    if let Some(pointer_pos) = response.hover_pos() {
-        let picking_result =
-            scene.picking(glam::vec2(pointer_pos.x, pointer_pos.y), &rect, &eye, 5.0);
+    if let (true, Some(pointer_pos)) = (should_do_hovering, response.hover_pos()) {
+        // Schedule GPU picking.
+        let pointer_in_pixel =
+            ((pointer_pos - rect.left_top()) * ui.ctx().pixels_per_point()).round();
+        let _ = view_builder.schedule_picking_rect(
+            ctx.render_ctx,
+            re_renderer::IntRect::from_middle_and_extent(
+                glam::ivec2(pointer_in_pixel.x as i32, pointer_in_pixel.y as i32),
+                glam::uvec2(PICKING_RECT_SIZE, PICKING_RECT_SIZE),
+            ),
+            space_view_id.gpu_readback_id(),
+            (),
+            ctx.app_options.show_picking_debug_overlay,
+        );
+
+        let picking_result = scene.picking(
+            ctx.render_ctx,
+            space_view_id.gpu_readback_id(),
+            &state.previous_picking_result,
+            glam::vec2(pointer_pos.x, pointer_pos.y),
+            &rect,
+            &eye,
+            5.0,
+        );
+        state.previous_picking_result = Some(picking_result.clone());
 
         for hit in picking_result.iter_hits() {
             let Some(instance_path) = hit.instance_path_hash.resolve(&ctx.log_db.entity_db)
@@ -390,6 +461,8 @@ pub fn view_3d(
             .map(|hit| picking_result.space_position(hit));
 
         project_onto_other_spaces(ctx, &scene.space_cameras, &mut state.state_3d, space);
+    } else {
+        state.previous_picking_result = None;
     }
 
     ctx.select_hovered_on_click(&response);
@@ -434,6 +507,13 @@ pub fn view_3d(
             state.state_3d.camera_before_tracked_camera = None;
             state.state_3d.tracked_camera = None;
         }
+    }
+
+    // Screenshot context menu.
+    let (_, screenshot_mode) = screenshot_context_menu(ctx, response);
+    if let Some(mode) = screenshot_mode {
+        let _ =
+            view_builder.schedule_screenshot(ctx.render_ctx, space_view_id.gpu_readback_id(), mode);
     }
 
     show_projections_from_2d_space(ctx, &mut scene, &state.scene_bbox_accum);
@@ -482,68 +562,30 @@ pub fn view_3d(
         }
     }
 
-    paint_view(
-        ui,
-        eye,
-        rect,
-        scene,
+    // Composite viewbuilder into egui.
+    let command_buffer = match fill_view_builder(
         ctx.render_ctx,
-        &space.to_string(),
-        state.auto_size_config(rect.size()),
-    );
+        &mut view_builder,
+        scene.primitives,
+        &ScreenBackground::GenericSkybox,
+    ) {
+        Ok(command_buffer) => command_buffer,
+        Err(err) => {
+            re_log::error!("Failed to fill view builder: {}", err);
+            return;
+        }
+    };
+    ui.painter().add(renderer_paint_callback(
+        ctx.render_ctx,
+        command_buffer,
+        view_builder,
+        rect,
+        ui.ctx().pixels_per_point(),
+    ));
 
     // Add egui driven labels on top of re_renderer content.
     let painter = ui.painter().with_clip_rect(ui.max_rect());
     painter.extend(label_shapes);
-}
-
-fn paint_view(
-    ui: &mut egui::Ui,
-    eye: Eye,
-    rect: egui::Rect,
-    scene: SceneSpatial,
-    render_ctx: &mut RenderContext,
-    name: &str,
-    auto_size_config: re_renderer::AutoSizeConfig,
-) {
-    crate::profile_function!();
-
-    // Determine view port resolution and position.
-    let pixels_from_point = ui.ctx().pixels_per_point();
-    let resolution_in_pixel = get_viewport(rect, pixels_from_point);
-    if resolution_in_pixel[0] == 0 || resolution_in_pixel[1] == 0 {
-        return;
-    }
-
-    let target_config = TargetConfiguration {
-        name: name.into(),
-
-        resolution_in_pixel,
-
-        view_from_world: eye.world_from_view.inverse(),
-        projection_from_view: Projection::Perspective {
-            vertical_fov: eye.fov_y.unwrap(),
-            near_plane_distance: eye.near(),
-        },
-
-        pixels_from_point,
-        auto_size_config,
-
-        outline_config: scene
-            .primitives
-            .any_outlines
-            .then(|| outline_config(ui.ctx())),
-    };
-
-    let Ok(callback) = create_scene_paint_callback(
-        render_ctx,
-        target_config,
-        rect,
-        scene.primitives, &ScreenBackground::GenericSkybox)
-    else {
-        return;
-    };
-    ui.painter().add(callback);
 }
 
 fn show_projections_from_2d_space(

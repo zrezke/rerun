@@ -13,29 +13,12 @@ use re_renderer::{
         TestTriangleDrawData,
     },
     view_builder::{OrthographicCameraMode, Projection, TargetConfiguration, ViewBuilder},
-    Color32, LineStripSeriesBuilder, PointCloudBuilder, RenderContext, Rgba, Size,
+    Color32, GpuReadbackIdentifier, LineStripSeriesBuilder, PointCloudBuilder, RenderContext, Rgba,
+    ScreenshotProcessor, Size,
 };
 use winit::event::{ElementState, VirtualKeyCode};
 
 mod framework;
-
-fn draw_view<D: 'static + re_renderer::renderer::DrawData + Sync + Send + Clone>(
-    re_ctx: &mut RenderContext,
-    target_cfg: TargetConfiguration,
-    skybox: &GenericSkyboxDrawData,
-    draw_data: &D,
-) -> (ViewBuilder, wgpu::CommandBuffer) {
-    let mut view_builder = ViewBuilder::default();
-    let command_buffer = view_builder
-        .setup_view(re_ctx, target_cfg)
-        .unwrap()
-        .queue_draw(skybox)
-        .queue_draw(draw_data)
-        .draw(re_ctx, Rgba::TRANSPARENT)
-        .unwrap();
-
-    (view_builder, command_buffer)
-}
 
 fn build_mesh_instances(
     re_ctx: &mut RenderContext,
@@ -101,7 +84,7 @@ fn build_lines(re_ctx: &mut RenderContext, seconds_since_startup: f32) -> LineDr
     // Calculate some points that look nice for an animated line.
     let lorenz_points = lorenz_points(seconds_since_startup);
 
-    let mut builder = LineStripSeriesBuilder::<()>::default();
+    let mut builder = LineStripSeriesBuilder::<()>::new(re_ctx);
     {
         let mut batch = builder.batch("lines without transform");
 
@@ -165,6 +148,8 @@ struct Multiview {
     random_points_positions: Vec<glam::Vec3>,
     random_points_radii: Vec<Size>,
     random_points_colors: Vec<Color32>,
+
+    take_screenshot_next_frame_for_view: Option<u32>,
 }
 
 fn random_color(rnd: &mut impl rand::Rng) -> Color32 {
@@ -175,6 +160,77 @@ fn random_color(rnd: &mut impl rand::Rng) -> Color32 {
         a: 1.0,
     }
     .into()
+}
+
+/// Readback identifier for screenshots.
+/// Identifiers don't need to be unique and we don't have anything interesting to distinguish here!
+const READBACK_IDENTIFIER: GpuReadbackIdentifier = 0;
+
+fn handle_incoming_screenshots(re_ctx: &RenderContext) {
+    ScreenshotProcessor::next_readback_result(
+        re_ctx,
+        READBACK_IDENTIFIER,
+        |data, _extent, view_idx: u32| {
+            re_log::info!(
+                "Received screenshot for view {view_idx}. Total bytes {:?}",
+                data.len()
+            );
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Get next available file name.
+                let mut i = 1;
+                let filename = loop {
+                    let filename = format!("screenshot_{i}.png");
+                    if !std::path::Path::new(&filename).exists() {
+                        break filename;
+                    }
+                    i += 1;
+                };
+
+                image::save_buffer(
+                    filename,
+                    data,
+                    _extent.x,
+                    _extent.y,
+                    image::ColorType::Rgba8,
+                )
+                .expect("Failed to save screenshot");
+            }
+        },
+    );
+}
+
+impl Multiview {
+    fn draw_view<D: 'static + re_renderer::renderer::DrawData + Sync + Send + Clone>(
+        &mut self,
+        re_ctx: &mut RenderContext,
+        target_cfg: TargetConfiguration,
+        skybox: &GenericSkyboxDrawData,
+        draw_data: &D,
+        index: u32,
+    ) -> (ViewBuilder, wgpu::CommandBuffer) {
+        let mut view_builder = ViewBuilder::default();
+        view_builder.setup_view(re_ctx, target_cfg).unwrap();
+
+        if self
+            .take_screenshot_next_frame_for_view
+            .map_or(false, |i| i == index)
+        {
+            view_builder
+                .schedule_screenshot(re_ctx, READBACK_IDENTIFIER, index)
+                .unwrap();
+            re_log::info!("Scheduled screenshot for view {}", index);
+        }
+
+        let command_buffer = view_builder
+            .queue_draw(skybox)
+            .queue_draw(draw_data)
+            .draw(re_ctx, Rgba::TRANSPARENT)
+            .unwrap();
+
+        (view_builder, command_buffer)
+    }
 }
 
 impl Example for Multiview {
@@ -229,6 +285,8 @@ impl Example for Multiview {
             random_points_positions,
             random_points_radii,
             random_points_colors,
+
+            take_screenshot_next_frame_for_view: None,
         }
     }
 
@@ -247,6 +305,8 @@ impl Example for Multiview {
                 seconds_since_startup.cos(),
             ) * 10.0;
         }
+
+        handle_incoming_screenshots(re_ctx);
 
         let seconds_since_startup = time.seconds_since_startup();
         let view_from_world =
@@ -295,7 +355,7 @@ impl Example for Multiview {
         #[rustfmt::skip]
         macro_rules! draw {
             ($name:ident @ split #$n:expr) => {{
-                let (view_builder, command_buffer) = draw_view(re_ctx,
+                let (view_builder, command_buffer) = self.draw_view(re_ctx,
                     TargetConfiguration {
                         name: stringify!($name).into(),
                         resolution_in_pixel: splits[$n].resolution_in_pixel,
@@ -305,7 +365,8 @@ impl Example for Multiview {
                         ..Default::default()
                     },
                     &skybox,
-                    &$name
+                    &$name,
+                    $n,
                 );
                 framework::ViewDrawResult {
                     view_builder,
@@ -315,12 +376,16 @@ impl Example for Multiview {
             }};
         }
 
-        vec![
+        let draw_results = vec![
             draw!(triangle @ split #0),
             draw!(lines @ split #1),
             draw!(meshes @ split #2),
             draw!(point_cloud @ split #3),
-        ]
+        ];
+
+        self.take_screenshot_next_frame_for_view = None;
+
+        draw_results
     }
 
     fn on_keyboard_input(&mut self, input: winit::event::KeyboardInput) {
@@ -334,6 +399,19 @@ impl Example for Multiview {
                     CameraControl::RotateAroundCenter => CameraControl::Manual,
                     CameraControl::Manual => CameraControl::RotateAroundCenter,
                 };
+            }
+
+            (ElementState::Pressed, Some(VirtualKeyCode::Key1)) => {
+                self.take_screenshot_next_frame_for_view = Some(0);
+            }
+            (ElementState::Pressed, Some(VirtualKeyCode::Key2)) => {
+                self.take_screenshot_next_frame_for_view = Some(1);
+            }
+            (ElementState::Pressed, Some(VirtualKeyCode::Key3)) => {
+                self.take_screenshot_next_frame_for_view = Some(2);
+            }
+            (ElementState::Pressed, Some(VirtualKeyCode::Key4)) => {
+                self.take_screenshot_next_frame_for_view = Some(3);
             }
 
             _ => {}

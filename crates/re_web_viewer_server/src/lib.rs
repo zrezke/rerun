@@ -12,6 +12,26 @@ use std::task::{Context, Poll};
 use futures_util::future;
 use hyper::{server::conn::AddrIncoming, service::Service, Body, Request, Response};
 
+#[cfg(not(feature = "__ci"))]
+mod data {
+    // If you add/remove/change the paths here, also update the include-list in `Cargo.toml`!
+    pub const INDEX_HTML: &[u8] = include_bytes!("../web_viewer/index_bundled.html");
+    pub const FAVICON: &[u8] = include_bytes!("../web_viewer/favicon.svg");
+    pub const SW_JS: &[u8] = include_bytes!("../web_viewer/sw.js");
+
+    #[cfg(debug_assertions)]
+    pub const VIEWER_JS_DEBUG: &[u8] = include_bytes!("../web_viewer/re_viewer_debug.js");
+
+    #[cfg(debug_assertions)]
+    pub const VIEWER_WASM_DEBUG: &[u8] = include_bytes!("../web_viewer/re_viewer_debug_bg.wasm");
+
+    #[cfg(not(debug_assertions))]
+    pub const VIEWER_JS_RELEASE: &[u8] = include_bytes!("../web_viewer/re_viewer.js");
+
+    #[cfg(not(debug_assertions))]
+    pub const VIEWER_WASM_RELEASE: &[u8] = include_bytes!("../web_viewer/re_viewer_bg.wasm");
+}
+
 struct Svc {
     // NOTE: Optional because it is possible to have the `analytics` feature flag enabled
     // while at the same time opting-out of analytics at run-time.
@@ -60,22 +80,24 @@ impl Service<Request<Body>> for Svc {
             self.on_serve_wasm(); // to silence warning about the function being unused
         }
 
-        panic!("web_server compiled with '__ci' feature (or `--all-features`). DON'T DO THAT! It's only for the CI!");
+        // panic! is not enough in hyper (since it uses catch_unwind) - that only kills this thread. We want to quit.
+        eprintln!("web_server compiled with '__ci' feature (or `--all-features`). DON'T DO THAT! It's only for the CI!");
+        std::process::abort();
     }
 
     #[cfg(not(feature = "__ci"))]
     fn call(&mut self, req: Request<Body>) -> Self::Future {
-        let rsp = Response::builder();
+        let response = Response::builder();
 
-        let bytes = match req.uri().path() {
-            "/" | "/index.html" => &include_bytes!("../web_viewer/index.html")[..],
-            "/favicon.ico" => &include_bytes!("../web_viewer/favicon.ico")[..],
-            "/sw.js" => &include_bytes!("../web_viewer/sw.js")[..],
+        let (mime, bytes) = match req.uri().path() {
+            "/" | "/index.html" => ("text/html", data::INDEX_HTML),
+            "/favicon.svg" => ("image/svg+xml", data::FAVICON),
+            "/sw.js" => ("text/javascript", data::SW_JS),
 
             #[cfg(debug_assertions)]
-            "/re_viewer.js" => &include_bytes!("../web_viewer/re_viewer_debug.js")[..],
+            "/re_viewer.js" => ("text/javascript", data::VIEWER_JS_DEBUG),
             #[cfg(not(debug_assertions))]
-            "/re_viewer.js" => &include_bytes!("../web_viewer/re_viewer.js")[..],
+            "/re_viewer.js" => ("text/javascript", data::VIEWER_JS_RELEASE),
 
             "/re_viewer_bg.wasm" => {
                 #[cfg(feature = "analytics")]
@@ -84,24 +106,28 @@ impl Service<Request<Body>> for Svc {
                 #[cfg(debug_assertions)]
                 {
                     re_log::info_once!("Serving DEBUG web-viewer");
-                    &include_bytes!("../web_viewer/re_viewer_debug_bg.wasm")[..]
+                    ("application/wasm", data::VIEWER_WASM_DEBUG)
                 }
                 #[cfg(not(debug_assertions))]
                 {
-                    &include_bytes!("../web_viewer/re_viewer_bg.wasm")[..]
+                    ("application/wasm", data::VIEWER_WASM_RELEASE)
                 }
             }
             _ => {
                 re_log::warn!("404 path: {}", req.uri().path());
                 let body = Body::from(Vec::new());
-                let rsp = rsp.status(404).body(body).unwrap();
+                let rsp = response.status(404).body(body).unwrap();
                 return future::ok(rsp);
             }
         };
 
         let body = Body::from(Vec::from(bytes));
-        let rsp = rsp.status(200).body(body).unwrap();
-        future::ok(rsp)
+        let mut response = response.status(200).body(body).unwrap();
+        response.headers_mut().insert(
+            hyper::header::CONTENT_TYPE,
+            hyper::header::HeaderValue::from_static(mime),
+        );
+        future::ok(response)
     }
 }
 
@@ -135,8 +161,15 @@ impl WebViewerServer {
         Self { server }
     }
 
-    pub async fn serve(self) -> anyhow::Result<()> {
-        self.server.await?;
+    pub async fn serve(
+        self,
+        mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    ) -> anyhow::Result<()> {
+        self.server
+            .with_graceful_shutdown(async {
+                shutdown_rx.recv().await.ok();
+            })
+            .await?;
         Ok(())
     }
 }

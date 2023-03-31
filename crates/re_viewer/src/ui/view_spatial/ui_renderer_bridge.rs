@@ -1,7 +1,7 @@
 use egui::mutex::Mutex;
 use re_renderer::{
     renderer::{DepthCloudDrawData, GenericSkyboxDrawData, MeshDrawData, RectangleDrawData},
-    view_builder::{TargetConfiguration, ViewBuilder},
+    view_builder::ViewBuilder,
     RenderContext,
 };
 
@@ -14,38 +14,18 @@ pub fn get_viewport(clip_rect: egui::Rect, pixels_from_point: f32) -> [u32; 2] {
     [resolution.x as u32, resolution.y as u32]
 }
 
-pub fn create_scene_paint_callback(
-    render_ctx: &mut RenderContext,
-    target_config: TargetConfiguration,
-    clip_rect: egui::Rect,
-    primitives: SceneSpatialPrimitives,
-    background: &ScreenBackground,
-) -> anyhow::Result<egui::PaintCallback> {
-    let pixels_from_point = target_config.pixels_from_point;
-    let (command_buffer, view_builder) =
-        create_and_fill_view_builder(render_ctx, target_config, primitives, background)?;
-    Ok(renderer_paint_callback(
-        render_ctx,
-        command_buffer,
-        view_builder,
-        clip_rect,
-        pixels_from_point,
-    ))
-}
-
 pub enum ScreenBackground {
     GenericSkybox,
     ClearColor(re_renderer::Rgba),
 }
 
-fn create_and_fill_view_builder(
+pub fn fill_view_builder(
     render_ctx: &mut RenderContext,
-    target_config: TargetConfiguration,
+    view_builder: &mut ViewBuilder,
     primitives: SceneSpatialPrimitives,
     background: &ScreenBackground,
-) -> anyhow::Result<(wgpu::CommandBuffer, ViewBuilder)> {
-    let mut view_builder = ViewBuilder::default();
-    view_builder.setup_view(render_ctx, target_config)?;
+) -> anyhow::Result<wgpu::CommandBuffer> {
+    crate::profile_function!();
 
     view_builder
         .queue_draw(&DepthCloudDrawData::new(render_ctx, &primitives.depth_clouds).unwrap())
@@ -69,19 +49,22 @@ fn create_and_fill_view_builder(
         },
     )?;
 
-    Ok((command_buffer, view_builder))
+    Ok(command_buffer)
 }
 
 slotmap::new_key_type! { pub struct ViewBuilderHandle; }
+
 type ViewBuilderMap = slotmap::SlotMap<ViewBuilderHandle, ViewBuilder>;
 
-fn renderer_paint_callback(
+pub fn renderer_paint_callback(
     render_ctx: &mut RenderContext,
     command_buffer: wgpu::CommandBuffer,
     view_builder: ViewBuilder,
     clip_rect: egui::Rect,
     pixels_from_point: f32,
 ) -> egui::PaintCallback {
+    crate::profile_function!();
+
     // egui paint callback are copyable / not a FnOnce (this in turn is because egui primitives can be callbacks and are copyable)
     let command_buffer = std::sync::Arc::new(Mutex::new(Some(command_buffer)));
 

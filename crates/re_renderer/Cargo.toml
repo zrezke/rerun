@@ -53,9 +53,8 @@ ecolor = { workspace = true, features = ["bytemuck"] }
 enumset.workspace = true
 glam = { workspace = true, features = ["bytemuck"] }
 half = { workspace = true, features = ["bytemuck"] }
-itertools = "0.10"
+itertools = { workspace = true }
 macaw.workspace = true
-memoffset = "0.8"
 ordered-float = "3.2"
 parking_lot.workspace = true
 slotmap = "1.0.6"
@@ -77,6 +76,7 @@ notify = "5.0"
 puffin.workspace = true
 wgpu = { workspace = true, default-features = false, features = ["wgsl"] }
 wgpu-core.workspace = true
+wgpu-hal.workspace = true
 
 # wasm
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -93,7 +93,6 @@ instant = { version = "0.1", features = ["wasm-bindgen"] }
 log = "0.4"
 pollster = "0.3"
 rand = "0.8"
-tracing.workspace = true
 winit = "0.28.1"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 

@@ -2,16 +2,18 @@
 #![allow(clippy::borrow_deref_ref)] // False positive due to #[pufunction] macro
 #![allow(unsafe_op_in_unsafe_fn)] // False positive due to #[pufunction] macro
 
-use std::{io::Cursor, path::PathBuf};
+use std::{borrow::Cow, io::Cursor, path::PathBuf};
 
+use itertools::izip;
 use pyo3::{
-    exceptions::{PyRuntimeError, PyTypeError},
+    exceptions::{PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
     types::PyDict,
 };
 
+use re_log_types::{DataRow, DataTableError};
 use rerun::{
-    log::{LogMsg, MsgBundle, MsgId, PathOp},
+    log::{LogMsg, MsgId, PathOp},
     time::{Time, TimeInt, TimePoint, TimeType, Timeline},
     ApplicationId, EntityPath, RecordingId,
 };
@@ -295,7 +297,12 @@ fn serve(open_browser: bool) -> PyResult<()> {
             return Ok(());
         }
 
+        use once_cell::sync::Lazy;
+        static TOKIO_RUNTIME: Lazy<tokio::runtime::Runtime> =
+            Lazy::new(|| tokio::runtime::Runtime::new().expect("Failed to create tokio runtime"));
+        let _guard = TOKIO_RUNTIME.enter();
         session.set_sink(rerun::web_viewer::new_sink(open_browser));
+
         Ok(())
     }
 
@@ -457,14 +464,17 @@ fn log_transform(
     // python side will take a bit of additional work and testing to ensure we aren't
     // introducing new numerical issues.
 
-    let bundle = MsgBundle::new(
+    let row = DataRow::from_cells1(
         MsgId::random(),
         entity_path,
         time_point,
-        vec![vec![transform].try_into().unwrap()],
+        1,
+        [transform].as_slice(),
     );
 
-    let msg = bundle.try_into().unwrap();
+    let msg = (&row.into_table())
+        .try_into()
+        .map_err(|err: DataTableError| PyValueError::new_err(err.to_string()))?;
 
     session.send(LogMsg::ArrowMsg(msg));
 
@@ -537,14 +547,18 @@ fn log_view_coordinates(
     // non-trivial. Implementing this functionality on the python side will take
     // a bit of additional work and testing to ensure we aren't introducing new
     // conversion errors.
-    let bundle = MsgBundle::new(
+
+    let row = DataRow::from_cells1(
         MsgId::random(),
         entity_path,
         time_point,
-        vec![vec![coordinates].try_into().unwrap()],
+        1,
+        [coordinates].as_slice(),
     );
 
-    let msg = bundle.try_into().unwrap();
+    let msg = (&row.into_table())
+        .try_into()
+        .map_err(|err: DataTableError| PyValueError::new_err(err.to_string()))?;
 
     session.send(LogMsg::ArrowMsg(msg));
 
@@ -569,6 +583,7 @@ enum TensorDataMeaning {
 fn log_meshes(
     entity_path_str: &str,
     position_buffers: Vec<numpy::PyReadonlyArray1<'_, f32>>,
+    vertex_color_buffers: Vec<Option<numpy::PyReadonlyArray2<'_, u8>>>,
     index_buffers: Vec<Option<numpy::PyReadonlyArray1<'_, u32>>>,
     normal_buffers: Vec<Option<numpy::PyReadonlyArray1<'_, f32>>>,
     albedo_factors: Vec<Option<numpy::PyReadonlyArray1<'_, f32>>>,
@@ -577,14 +592,16 @@ fn log_meshes(
     let entity_path = parse_entity_path(entity_path_str)?;
 
     // Make sure we have as many position buffers as index buffers, etc.
-    if position_buffers.len() != index_buffers.len()
+    if position_buffers.len() != vertex_color_buffers.len()
+        || position_buffers.len() != index_buffers.len()
         || position_buffers.len() != normal_buffers.len()
         || position_buffers.len() != albedo_factors.len()
     {
         return Err(PyTypeError::new_err(format!(
             "Top-level position/index/normal/albedo buffer arrays must be same the length, \
-                got positions={}, indices={}, normals={}, albedo={} instead",
+                got positions={}, vertex_colors={}, indices={}, normals={}, albedo={} instead",
             position_buffers.len(),
+            vertex_color_buffers.len(),
             index_buffers.len(),
             normal_buffers.len(),
             albedo_factors.len(),
@@ -596,34 +613,60 @@ fn log_meshes(
     let time_point = time(timeless);
 
     let mut meshes = Vec::with_capacity(position_buffers.len());
-    for (i, positions) in position_buffers.into_iter().enumerate() {
-        let albedo_factor = if let Some(v) = albedo_factors[i]
-            .as_ref()
-            .map(|albedo_factor| albedo_factor.as_array().to_vec())
-        {
-            match v.len() {
-                3 => Vec4D([v[0], v[1], v[2], 1.0]),
-                4 => Vec4D([v[0], v[1], v[2], v[3]]),
-                _ => {
+
+    for (vertex_positions, vertex_colors, indices, normals, albedo_factor) in izip!(
+        position_buffers,
+        vertex_color_buffers,
+        index_buffers,
+        normal_buffers,
+        albedo_factors,
+    ) {
+        let albedo_factor =
+            if let Some(v) = albedo_factor.map(|albedo_factor| albedo_factor.as_array().to_vec()) {
+                match v.len() {
+                    3 => Vec4D([v[0], v[1], v[2], 1.0]),
+                    4 => Vec4D([v[0], v[1], v[2], v[3]]),
+                    _ => {
+                        return Err(PyTypeError::new_err(format!(
+                            "Albedo factor must be vec3 or vec4, got {v:?} instead",
+                        )));
+                    }
+                }
+                .into()
+            } else {
+                None
+            };
+
+        let vertex_colors = if let Some(vertex_colors) = vertex_colors {
+            match vertex_colors.shape() {
+                [_, 3] => Some(
+                    slice_from_np_array(&vertex_colors)
+                        .chunks_exact(3)
+                        .map(|c| ColorRGBA::from_rgb(c[0], c[1], c[2]).0)
+                        .collect(),
+                ),
+                [_, 4] => Some(
+                    slice_from_np_array(&vertex_colors)
+                        .chunks_exact(4)
+                        .map(|c| ColorRGBA::from_unmultiplied_rgba(c[0], c[1], c[2], c[3]).0)
+                        .collect(),
+                ),
+                shape => {
                     return Err(PyTypeError::new_err(format!(
-                        "Albedo factor must be vec3 or vec4, got {v:?} instead",
+                        "Expected vertex colors to have a Nx3 or Nx4 shape, got {shape:?} instead",
                     )));
                 }
             }
-            .into()
         } else {
             None
         };
 
         let raw = RawMesh3D {
             mesh_id: MeshId::random(),
-            positions: positions.as_array().to_vec(),
-            indices: index_buffers[i]
-                .as_ref()
-                .map(|indices| indices.as_array().to_vec()),
-            normals: normal_buffers[i]
-                .as_ref()
-                .map(|normals| normals.as_array().to_vec()),
+            vertex_positions: vertex_positions.as_array().to_vec().into(),
+            vertex_colors,
+            indices: indices.map(|indices| indices.as_array().to_vec().into()),
+            vertex_normals: normals.map(|normals| normals.as_array().to_vec().into()),
             albedo_factor,
         };
         raw.sanity_check()
@@ -639,14 +682,17 @@ fn log_meshes(
     //
     // TODO(jleibs) replace with python-native implementation
 
-    let bundle = MsgBundle::new(
+    let row = DataRow::from_cells1(
         MsgId::random(),
         entity_path,
         time_point,
-        vec![meshes.try_into().unwrap()],
+        meshes.len() as _,
+        meshes,
     );
 
-    let msg = bundle.try_into().unwrap();
+    let msg = (&row.into_table())
+        .try_into()
+        .map_err(|err: DataTableError| PyValueError::new_err(err.to_string()))?;
 
     session.send(LogMsg::ArrowMsg(msg));
 
@@ -673,7 +719,7 @@ fn log_mesh_file(
             )));
         }
     };
-    let bytes = bytes.into();
+    let bytes: Vec<u8> = bytes.into();
     let transform = if transform.is_empty() {
         [
             [1.0, 0.0, 0.0], // col 0
@@ -706,7 +752,7 @@ fn log_mesh_file(
     let mesh3d = Mesh3D::Encoded(EncodedMesh3D {
         mesh_id: MeshId::random(),
         format,
-        bytes,
+        bytes: bytes.into(),
         transform,
     });
 
@@ -717,14 +763,17 @@ fn log_mesh_file(
     //
     // TODO(jleibs) replace with python-native implementation
 
-    let bundle = MsgBundle::new(
+    let row = DataRow::from_cells1(
         MsgId::random(),
         entity_path,
         time_point,
-        vec![vec![mesh3d].try_into().unwrap()],
+        1,
+        [mesh3d].as_slice(),
     );
 
-    let msg = bundle.try_into().unwrap();
+    let msg = (&row.into_table())
+        .try_into()
+        .map_err(|err: DataTableError| PyValueError::new_err(err.to_string()))?;
 
     session.send(LogMsg::ArrowMsg(msg));
 
@@ -794,26 +843,29 @@ fn log_image_file(
 
     let time_point = time(timeless);
 
-    let bundle = MsgBundle::new(
+    let tensor = re_log_types::component_types::Tensor {
+        tensor_id: TensorId::random(),
+        shape: vec![
+            TensorDimension::height(h as _),
+            TensorDimension::width(w as _),
+            TensorDimension::depth(3),
+        ],
+        data: re_log_types::component_types::TensorData::JPEG(img_bytes.into()),
+        meaning: re_log_types::component_types::TensorDataMeaning::Unknown,
+        meter: None,
+    };
+
+    let row = DataRow::from_cells1(
         MsgId::random(),
         entity_path,
         time_point,
-        vec![vec![re_log_types::component_types::Tensor {
-            tensor_id: TensorId::random(),
-            shape: vec![
-                TensorDimension::height(h as _),
-                TensorDimension::width(w as _),
-                TensorDimension::depth(3),
-            ],
-            data: re_log_types::component_types::TensorData::JPEG(img_bytes.into()),
-            meaning: re_log_types::component_types::TensorDataMeaning::Unknown,
-            meter: None,
-        }]
-        .try_into()
-        .unwrap()],
+        1,
+        [tensor].as_slice(),
     );
 
-    let msg = bundle.try_into().unwrap();
+    let msg = (&row.into_table())
+        .try_into()
+        .map_err(|err: DataTableError| PyValueError::new_err(err.to_string()))?;
 
     session.send(LogMsg::ArrowMsg(msg));
 
@@ -881,14 +933,18 @@ fn log_annotation_context(
     // implementation.
     //
     // TODO(jleibs) replace with python-native implementation
-    let bundle = MsgBundle::new(
+
+    let row = DataRow::from_cells1(
         MsgId::random(),
         entity_path,
         time_point,
-        vec![vec![annotation_context.clone()].try_into().unwrap()],
+        1,
+        [annotation_context].as_slice(),
     );
 
-    let msg = bundle.try_into().unwrap();
+    let msg = (&row.into_table())
+        .try_into()
+        .map_err(|err: DataTableError| PyValueError::new_err(err.to_string()))?;
 
     session.send(LogMsg::ArrowMsg(msg));
 
@@ -920,4 +976,23 @@ fn log_arrow_msg(entity_path: &str, components: &PyDict, timeless: bool) -> PyRe
     session.send(msg);
 
     Ok(())
+}
+
+// ----------------------------------------------------------------------------
+
+fn slice_from_np_array<'a, T: numpy::Element, D: numpy::ndarray::Dimension>(
+    array: &'a numpy::PyReadonlyArray<'_, T, D>,
+) -> Cow<'a, [T]> {
+    let array = array.as_array();
+
+    // Numpy has many different memory orderings.
+    // We could/should check that we have the right one here.
+    // But for now, we just check for and optimize the trivial case.
+    if array.shape().len() == 1 {
+        if let Some(slice) = array.to_slice() {
+            return Cow::Borrowed(slice); // common-case optimization
+        }
+    }
+
+    Cow::Owned(array.iter().cloned().collect())
 }

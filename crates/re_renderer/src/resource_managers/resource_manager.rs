@@ -5,7 +5,7 @@ use slotmap::{Key, SlotMap};
 use crate::wgpu_resources::PoolError;
 
 /// Handle to a resource that is stored in a resource manager.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum ResourceHandle<InnerHandle: slotmap::Key> {
     /// Resource handle that keeps the resource alive as long as there are handles.
     ///
@@ -26,7 +26,7 @@ pub enum ResourceHandle<InnerHandle: slotmap::Key> {
     Invalid,
 }
 
-#[derive(thiserror::Error, Debug, PartialEq, Eq)]
+#[derive(thiserror::Error, Debug)]
 pub enum ResourceManagerError {
     #[error("The requested resource is no longer valid. It was valid for the frame index {current_frame_index}, but the current frame index is {valid_frame_index}")]
     ExpiredResource {
@@ -42,6 +42,9 @@ pub enum ResourceManagerError {
 
     #[error("Failed accessing resource pools")]
     ResourcePoolError(PoolError),
+
+    #[error("Invalid mesh given as input")]
+    InvalidMesh(#[from] crate::mesh::MeshError),
 }
 
 #[derive(Clone, Copy)]

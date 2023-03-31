@@ -11,12 +11,14 @@ pub mod encoding;
 pub mod datagen;
 
 pub mod arrow_msg;
+mod component;
 pub mod component_types;
-pub use arrow_msg::ArrowMsg;
 mod data;
+mod data_cell;
+mod data_row;
+mod data_table;
 pub mod hash;
 mod index;
-pub mod msg_bundle;
 pub mod path;
 mod time;
 pub mod time_point;
@@ -34,6 +36,8 @@ pub mod external {
     pub use image;
 }
 
+pub use self::arrow_msg::ArrowMsg;
+pub use self::component::{Component, DeserializableComponent, SerializableComponent};
 pub use self::component_types::context;
 pub use self::component_types::coordinates;
 pub use self::component_types::AnnotationContext;
@@ -42,6 +46,9 @@ pub use self::component_types::MsgId;
 pub use self::component_types::ViewCoordinates;
 pub use self::component_types::{EncodedMesh3D, Mesh3D, MeshFormat, MeshId, RawMesh3D};
 pub use self::data::*;
+pub use self::data_cell::{DataCell, DataCellError, DataCellResult};
+pub use self::data_row::{DataRow, DataRowError, DataRowResult};
+pub use self::data_table::{DataTable, DataTableError, DataTableResult};
 pub use self::index::*;
 pub use self::path::*;
 pub use self::time::{Duration, Time};
@@ -180,8 +187,11 @@ impl LogMsg {
         match self {
             Self::BeginRecordingMsg(msg) => msg.msg_id,
             Self::EntityPathOpMsg(msg) => msg.msg_id,
-            Self::ArrowMsg(msg) => msg.msg_id,
             Self::Goodbye(msg_id) => *msg_id,
+            // TODO(#1619): the following only makes sense because, while we support sending and
+            // receiving batches, we don't actually do so yet.
+            // We need to stop storing raw `LogMsg`s before we can benefit from our batching.
+            Self::ArrowMsg(msg) => msg.table_id,
         }
     }
 }

@@ -82,8 +82,8 @@ ehttp = "0.2.0"
 egui = { workspace = true, features = ["extra_debug_asserts", "tracing"] }
 egui_dock = { workspace = true, features = ["serde"] }
 egui_extras = { workspace = true, features = ["tracing"] }
-egui-notify = "0.6"
 egui-wgpu.workspace = true
+ehttp = "0.2"
 enumset.workspace = true
 glam = { workspace = true, features = [
   "mint",
@@ -94,20 +94,20 @@ image = { workspace = true, default-features = false, features = [
   "png",
 ] }
 instant = { version = "0.1", features = ["wasm-bindgen"] }
-itertools = "0.10"
+itertools = { workspace = true }
 lazy_static.workspace = true
 macaw = { workspace = true, features = ["with_serde"] }
-mint = "0.5"
 ndarray = "0.15"
 nohash-hasher = "0.2"
 poll-promise = "0.2"
-rand = { version = "0.8", features = ["small_rng"] }
-rfd = "0.11"
+rfd = { version = "0.11.3", default_features = false, features = [
+  "xdg-portal",
+] }
 serde = { version = "1", features = ["derive"] }
 slotmap = { version = "1.0.6", features = ["serde"] }
 smallvec = { version = "1.10", features = ["serde"] }
-time = { workspace = true, default-features = false, features = ["formatting"] }
 thiserror.workspace = true
+time = { workspace = true, default-features = false, features = ["formatting"] }
 uuid = { version = "1.1", features = ["serde", "v4", "js"] }
 vec1 = "1.8"
 wgpu.workspace = true
@@ -118,7 +118,6 @@ url = "2.3.1"
 arboard = { version = "3.2", default-features = false, features = [
   "image-data",
 ] }
-ctrlc = { version = "3.0", features = ["termination"] }
 puffin_http = "0.11"
 puffin.workspace = true
 
@@ -132,8 +131,13 @@ winapi = "0.3.9"
 # web dependencies:
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.6"
-tracing.workspace = true
 wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+
+[dependencies.web-sys]
+version = "0.3.52"
+features = ["Window"]
 
 
 [build-dependencies]

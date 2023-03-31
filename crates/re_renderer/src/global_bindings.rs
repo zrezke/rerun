@@ -15,7 +15,7 @@ use smallvec::smallvec;
 /// (does not contain information that is special to a particular renderer)
 #[repr(C, align(256))]
 #[derive(Clone, Copy, Zeroable, Pod)]
-pub(crate) struct FrameUniformBuffer {
+pub struct FrameUniformBuffer {
     pub view_from_world: wgpu_buffer_types::Mat4x3,
     pub projection_from_view: wgpu_buffer_types::Mat4,
     pub projection_from_world: wgpu_buffer_types::Mat4,
@@ -36,7 +36,7 @@ pub(crate) struct FrameUniformBuffer {
     pub pixels_from_point: f32,
 
     /// (tan(fov_y / 2) * aspect_ratio, tan(fov_y /2)), i.e. half ratio of screen dimension to screen distance in x & y.
-    /// Both values are set to positive infinity for orthographic projection
+    /// Both values are set to f32max for orthographic projection
     pub tan_half_fov: wgpu_buffer_types::Vec2,
 
     // Size used for all point radii given with Size::AUTO.
@@ -46,7 +46,7 @@ pub(crate) struct FrameUniformBuffer {
     pub auto_size_lines: f32,
 
     /// Factor used to compute depth offsets, see `depth_offset.wgsl`.
-    pub depth_offset_factor: wgpu_buffer_types::F32RowPadded,
+    pub end_padding: wgpu_buffer_types::PaddingRow,
 }
 
 pub(crate) struct GlobalBindings {
@@ -61,7 +61,7 @@ impl GlobalBindings {
             layout: pools.bind_group_layouts.get_or_create(
                 device,
                 &BindGroupLayoutDesc {
-                    label: "global bind group layout".into(),
+                    label: "GlobalBindings::layout".into(),
 
                     // Needs to be kept in sync with `global_bindings.wgsl` / `create_bind_group`
                     entries: vec![
@@ -99,7 +99,7 @@ impl GlobalBindings {
             nearest_neighbor_sampler: pools.samplers.get_or_create(
                 device,
                 &SamplerDesc {
-                    label: "nearest".into(),
+                    label: "GlobalBindings::nearest_neighbor_sampler".into(),
                     address_mode_u: wgpu::AddressMode::Repeat,
                     address_mode_v: wgpu::AddressMode::Repeat,
                     address_mode_w: wgpu::AddressMode::Repeat,
@@ -109,7 +109,7 @@ impl GlobalBindings {
             trilinear_sampler: pools.samplers.get_or_create(
                 device,
                 &SamplerDesc {
-                    label: "linear".into(),
+                    label: "GlobalBindings::trilinear_sampler".into(),
                     mag_filter: wgpu::FilterMode::Linear,
                     min_filter: wgpu::FilterMode::Linear,
                     mipmap_filter: wgpu::FilterMode::Linear,
@@ -134,7 +134,7 @@ impl GlobalBindings {
             pools,
             // Needs to be kept in sync with `global_bindings.wgsl` / `self.layout`
             &BindGroupDesc {
-                label: "global bind group".into(),
+                label: "GlobalBindings::create_bind_group".into(),
                 entries: smallvec![
                     frame_uniform_buffer_binding,
                     BindGroupEntry::Sampler(self.nearest_neighbor_sampler),

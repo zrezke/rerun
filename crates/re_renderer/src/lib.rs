@@ -15,6 +15,7 @@ pub mod resource_managers;
 pub mod view_builder;
 
 mod allocator;
+mod color;
 mod colormap;
 mod context;
 mod debug_label;
@@ -26,6 +27,10 @@ mod size;
 mod wgpu_buffer_types;
 mod wgpu_resources;
 
+use allocator::GpuReadbackBuffer;
+pub use allocator::GpuReadbackIdentifier;
+
+pub use color::Rgba32Unmul;
 pub use colormap::{
     colormap_inferno_srgb, colormap_magma_srgb, colormap_plasma_srgb, colormap_srgb,
     colormap_turbo_srgb, colormap_viridis_srgb, grayscale_srgb, ColorMap,
@@ -38,6 +43,13 @@ pub use point_cloud_builder::{PointCloudBatchBuilder, PointCloudBuilder};
 pub use size::Size;
 pub use view_builder::AutoSizeConfig;
 pub use wgpu_resources::WgpuResourcePoolStatistics;
+
+mod draw_phases;
+pub(crate) use draw_phases::DrawPhase;
+pub use draw_phases::{
+    OutlineConfig, OutlineMaskPreference, PickingLayerId, PickingLayerInstanceId,
+    PickingLayerObjectId, PickingLayerProcessor, ScreenshotProcessor,
+};
 
 mod file_system;
 pub use self::file_system::{get_filesystem, FileSystem};
@@ -52,6 +64,9 @@ pub use self::file_resolver::{
 
 mod file_server;
 pub use self::file_server::FileServer;
+
+mod rect;
+pub use rect::IntRect;
 
 #[cfg(not(all(not(target_arch = "wasm32"), debug_assertions)))] // wasm or release builds
 #[rustfmt::skip] // it's auto-generated

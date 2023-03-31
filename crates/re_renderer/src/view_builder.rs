@@ -1,17 +1,17 @@
-use anyhow::{Context, Ok};
+use anyhow::Context;
 use parking_lot::RwLock;
 use std::sync::Arc;
 
 use crate::{
-    allocator::create_and_fill_uniform_buffer,
+    allocator::{create_and_fill_uniform_buffer, GpuReadbackIdentifier},
     context::RenderContext,
-    global_bindings::FrameUniformBuffer,
-    renderer::{
-        compositor::CompositorDrawData, DrawData, DrawPhase, OutlineConfig, OutlineMaskProcessor,
-        Renderer,
+    draw_phases::{
+        DrawPhase, OutlineConfig, OutlineMaskProcessor, PickingLayerProcessor, ScreenshotProcessor,
     },
+    global_bindings::FrameUniformBuffer,
+    renderer::{CompositorDrawData, DebugOverlayDrawData, DrawData, Renderer},
     wgpu_resources::{GpuBindGroup, GpuTexture, TextureDesc},
-    DebugLabel, Rgba, Size,
+    DebugLabel, IntRect, Rgba, Size,
 };
 
 type DrawFn = dyn for<'a, 'b> Fn(
@@ -30,6 +30,18 @@ struct QueuedDraw {
     participated_phases: &'static [DrawPhase],
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum ViewBuilderError {
+    #[error("ViewBuilder::setup_view needs to be called first.")]
+    ViewNotSetup,
+
+    #[error("Screenshot was already scheduled.")]
+    ScreenshotAlreadyScheduled,
+
+    #[error("Picking rectangle readback was already scheduled.")]
+    PickingRectAlreadyScheduled,
+}
+
 /// The highest level rendering block in `re_renderer`.
 /// Used to build up/collect various resources and then send them off for rendering of  a single view.
 #[derive(Default)]
@@ -40,6 +52,8 @@ pub struct ViewBuilder {
 
     // TODO(andreas): Consider making "render processors" a "thing" by establishing a form of hardcoded/limited-flexibility render-graph
     outline_mask_processor: Option<OutlineMaskProcessor>,
+    screenshot_processor: Option<ScreenshotProcessor>,
+    picking_processor: Option<PickingLayerProcessor>,
 }
 
 struct ViewTargetSetup {
@@ -49,6 +63,8 @@ struct ViewTargetSetup {
     main_target_msaa: GpuTexture,
     main_target_resolved: GpuTexture,
     depth_buffer: GpuTexture,
+
+    frame_uniform_buffer_content: FrameUniformBuffer,
 
     resolution_in_pixel: [u32; 2],
 }
@@ -182,6 +198,9 @@ impl ViewBuilder {
     /// In any case, this gets us onto a potentially much costlier rendering path, especially for tiling GPUs.
     pub const MAIN_TARGET_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
+    /// The texture format used for screenshots.
+    pub const SCREENSHOT_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
     /// Depth format used for the main target of the view builder.
     ///
     /// [`wgpu::TextureFormat::Depth24Plus`] would be preferable for performance, see [Nvidia's Vulkan dos and dont's](https://developer.nvidia.com/blog/vulkan-dos-donts/).
@@ -233,7 +252,7 @@ impl ViewBuilder {
         &mut self,
         ctx: &mut RenderContext,
         config: TargetConfiguration,
-    ) -> anyhow::Result<&mut Self> {
+    ) -> Result<&mut Self, ViewBuilderError> {
         crate::profile_function!();
 
         // Can't handle 0 size resolution since this would imply creating zero sized textures.
@@ -278,7 +297,23 @@ impl ViewBuilder {
             },
         );
 
-        self.queue_draw(&CompositorDrawData::new(ctx, &main_target_resolved));
+        self.outline_mask_processor = config.outline_config.as_ref().map(|outline_config| {
+            OutlineMaskProcessor::new(
+                ctx,
+                outline_config,
+                &config.name,
+                config.resolution_in_pixel,
+            )
+        });
+
+        self.queue_draw(&CompositorDrawData::new(
+            ctx,
+            &main_target_resolved,
+            self.outline_mask_processor
+                .as_ref()
+                .map(|p| p.final_voronoi_texture()),
+            &config.outline_config,
+        ));
 
         let aspect_ratio =
             config.resolution_in_pixel[0] as f32 / config.resolution_in_pixel[1] as f32;
@@ -352,7 +387,7 @@ impl ViewBuilder {
                         }
                     };
 
-                    let tan_half_fov = glam::vec2(f32::INFINITY, f32::INFINITY);
+                    let tan_half_fov = glam::vec2(f32::MAX, f32::MAX);
                     let pixel_world_size_from_camera_distance =
                         vertical_world_size / config.resolution_in_pixel[1] as f32;
 
@@ -390,29 +425,26 @@ impl ViewBuilder {
             config.auto_size_config.line_radius
         };
 
-        // See `depth_offset.wgsl`.
-        // Factor applied to depth offsets.
-        let depth_offset_factor = 1.0e-08; // Value determined by experimentation. Quite close to the f32 machine epsilon but a bit lower.
-
         // Setup frame uniform buffer
+        let frame_uniform_buffer_content = FrameUniformBuffer {
+            view_from_world: glam::Affine3A::from_mat4(view_from_world).into(),
+            projection_from_view: projection_from_view.into(),
+            projection_from_world: projection_from_world.into(),
+            camera_position,
+            camera_forward,
+            tan_half_fov: tan_half_fov.into(),
+            pixel_world_size_from_camera_distance,
+            pixels_from_point: config.pixels_from_point,
+
+            auto_size_points: auto_size_points.0,
+            auto_size_lines: auto_size_lines.0,
+
+            end_padding: Default::default(),
+        };
         let frame_uniform_buffer = create_and_fill_uniform_buffer(
             ctx,
             format!("{:?} - frame uniform buffer", config.name).into(),
-            FrameUniformBuffer {
-                view_from_world: glam::Affine3A::from_mat4(view_from_world).into(),
-                projection_from_view: projection_from_view.into(),
-                projection_from_world: projection_from_world.into(),
-                camera_position,
-                camera_forward,
-                tan_half_fov: tan_half_fov.into(),
-                pixel_world_size_from_camera_distance,
-                pixels_from_point: config.pixels_from_point,
-
-                auto_size_points: auto_size_points.0,
-                auto_size_lines: auto_size_lines.0,
-
-                depth_offset_factor: depth_offset_factor.into(),
-            },
+            frame_uniform_buffer_content,
         );
 
         let bind_group_0 = ctx.shared_renderer_data.global_bindings.create_bind_group(
@@ -421,15 +453,6 @@ impl ViewBuilder {
             frame_uniform_buffer,
         );
 
-        self.outline_mask_processor = config.outline_config.map(|outline_config| {
-            OutlineMaskProcessor::new(
-                ctx,
-                &outline_config,
-                &config.name,
-                config.resolution_in_pixel,
-            )
-        });
-
         self.setup = Some(ViewTargetSetup {
             name: config.name,
             bind_group_0,
@@ -437,6 +460,7 @@ impl ViewBuilder {
             main_target_resolved,
             depth_buffer,
             resolution_in_pixel: config.resolution_in_pixel,
+            frame_uniform_buffer_content,
         });
 
         Ok(self)
@@ -509,7 +533,7 @@ impl ViewBuilder {
             crate::profile_scope!("main target pass");
 
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: setup.name.clone().push_str(" - main pass").get(),
+                label: DebugLabel::from(format!("{} - main pass", setup.name)).get(),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &setup.main_target_msaa.default_view,
                     resolve_target: Some(&setup.main_target_resolved.default_view),
@@ -542,6 +566,25 @@ impl ViewBuilder {
             }
         }
 
+        if let Some(picking_processor) = self.picking_processor.take() {
+            {
+                let mut pass = picking_processor.begin_render_pass(&setup.name, &mut encoder);
+                // PickingProcessor has as custom frame uniform buffer.
+                //
+                // TODO(andreas): Formalize this somehow.
+                // Maybe just every processor should have its own and gets abstract information from the view builder to set it up?
+                // ... or we change this whole thing again so slice things differently:
+                // 0: Truly view Global: Samplers, time, point conversions, etc.
+                // 1: Phase global (camera & projection goes here)
+                // 2: Specific renderer
+                // 3: Draw call in renderer.
+                //
+                //pass.set_bind_group(0, &setup.bind_group_0, &[]);
+                self.draw_phase(ctx, DrawPhase::PickingLayer, &mut pass);
+            }
+            picking_processor.end_render_pass(&mut encoder);
+        }
+
         if let Some(outline_mask_processor) = self.outline_mask_processor.take() {
             crate::profile_scope!("outlines");
             {
@@ -550,12 +593,135 @@ impl ViewBuilder {
                 pass.set_bind_group(0, &setup.bind_group_0, &[]);
                 self.draw_phase(ctx, DrawPhase::OutlineMask, &mut pass);
             }
-            self.queue_draw(
-                &outline_mask_processor.compute_outlines(&ctx.gpu_resources, &mut encoder)?,
-            );
+            outline_mask_processor.compute_outlines(&ctx.gpu_resources, &mut encoder)?;
+        }
+
+        if let Some(screenshot_processor) = self.screenshot_processor.take() {
+            {
+                let mut pass = screenshot_processor.begin_render_pass(&setup.name, &mut encoder);
+                pass.set_bind_group(0, &setup.bind_group_0, &[]);
+                self.draw_phase(ctx, DrawPhase::CompositingScreenshot, &mut pass);
+            }
+            screenshot_processor.end_render_pass(&mut encoder);
         }
 
         Ok(encoder.finish())
+    }
+
+    /// Schedules the taking of a screenshot.
+    ///
+    /// Needs to be called after [`ViewBuilder::setup_view`] and before [`ViewBuilder::draw`].
+    /// Can only be called once per frame per [`ViewBuilder`].
+    ///
+    /// Data from the screenshot needs to be retrieved via [`crate::ScreenshotProcessor::next_readback_result`].
+    /// To do so, you need to pass the exact same `identifier` and type of user data as you've done here:
+    /// ```no_run
+    /// use re_renderer::{view_builder::ViewBuilder, RenderContext, ScreenshotProcessor};
+    /// fn take_screenshot(ctx: &RenderContext, view_builder: &mut ViewBuilder) {
+    ///     view_builder.schedule_screenshot(&ctx, 42, "My screenshot".to_owned());
+    /// }
+    /// fn receive_screenshots(ctx: &RenderContext) {
+    ///     while ScreenshotProcessor::next_readback_result::<String>(ctx, 42, |data, extent, user_data| {
+    ///             re_log::info!("Received screenshot {}", user_data);
+    ///         },
+    ///     ).is_some()
+    ///     {}
+    /// }
+    /// ```
+    ///
+    /// Received data that that isn't retrieved for more than a frame, will be automatically discarded.
+    pub fn schedule_screenshot<T: 'static + Send + Sync>(
+        &mut self,
+        ctx: &RenderContext,
+        identifier: GpuReadbackIdentifier,
+        user_data: T,
+    ) -> Result<(), ViewBuilderError> {
+        if self.screenshot_processor.is_some() {
+            return Err(ViewBuilderError::ScreenshotAlreadyScheduled);
+        };
+
+        let setup = self.setup.as_ref().ok_or(ViewBuilderError::ViewNotSetup)?;
+
+        self.screenshot_processor = Some(ScreenshotProcessor::new(
+            ctx,
+            &setup.name,
+            setup.resolution_in_pixel.into(),
+            identifier,
+            user_data,
+        ));
+
+        Ok(())
+    }
+
+    /// Schedules the readback of a rectangle from the picking layer.
+    ///
+    /// Needs to be called after [`ViewBuilder::setup_view`] and before [`ViewBuilder::draw`].
+    /// Can only be called once per frame per [`ViewBuilder`].
+    ///
+    /// The result will still be valid if the rectangle is partially or fully outside of bounds.
+    /// Areas that are not overlapping with the primary target will be filled as-if the view's target was bigger,
+    /// i.e. all values are valid picking IDs, it is up to the user to discard anything that is out of bounds.
+    ///
+    /// Note that the picking layer will not be created in the first place if this isn't called.
+    ///
+    /// Data from the picking rect needs to be retrieved via [`crate::PickingLayerProcessor::next_readback_result`].
+    /// To do so, you need to pass the exact same `identifier` and type of user data as you've done here:
+    /// ```no_run
+    /// use re_renderer::{view_builder::ViewBuilder, IntRect, PickingLayerProcessor, RenderContext};
+    /// fn schedule_picking_readback(
+    ///     ctx: &mut RenderContext,
+    ///     view_builder: &mut ViewBuilder,
+    ///     picking_rect: IntRect,
+    /// ) {
+    ///     view_builder.schedule_picking_rect(
+    ///         ctx, picking_rect, 42, "My screenshot".to_owned(), false,
+    ///     );
+    /// }
+    /// fn receive_screenshots(ctx: &RenderContext) {
+    ///     while let Some(result) = PickingLayerProcessor::next_readback_result::<String>(ctx, 42) {
+    ///         re_log::info!("Received picking_data {}", result.user_data);
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// Received data that that isn't retrieved for more than a frame, will be automatically discarded.
+    pub fn schedule_picking_rect<T: 'static + Send + Sync>(
+        &mut self,
+        ctx: &mut RenderContext,
+        picking_rect: IntRect,
+        readback_identifier: GpuReadbackIdentifier,
+        readback_user_data: T,
+        show_debug_view: bool,
+    ) -> Result<(), ViewBuilderError> {
+        if self.picking_processor.is_some() {
+            return Err(ViewBuilderError::PickingRectAlreadyScheduled);
+        };
+
+        let setup = self.setup.as_ref().ok_or(ViewBuilderError::ViewNotSetup)?;
+
+        let picking_processor = PickingLayerProcessor::new(
+            ctx,
+            &setup.name,
+            setup.resolution_in_pixel.into(),
+            picking_rect,
+            &setup.frame_uniform_buffer_content,
+            show_debug_view,
+            readback_identifier,
+            readback_user_data,
+        );
+
+        if show_debug_view {
+            self.queue_draw(&DebugOverlayDrawData::new(
+                ctx,
+                &picking_processor.picking_target,
+                setup.resolution_in_pixel.into(),
+                picking_rect,
+            ));
+        }
+
+        self.picking_processor = Some(picking_processor);
+
+        Ok(())
     }
 
     /// Composites the final result of a `ViewBuilder` to a given output `RenderPass`.
@@ -567,14 +733,10 @@ impl ViewBuilder {
         ctx: &'a RenderContext,
         pass: &mut wgpu::RenderPass<'a>,
         screen_position: glam::Vec2,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), ViewBuilderError> {
         crate::profile_function!();
 
-        let setup = self
-            .setup
-            .as_ref()
-            .context("ViewBuilder::setup_view wasn't called yet")?;
-
+        let setup = self.setup.as_ref().ok_or(ViewBuilderError::ViewNotSetup)?;
         pass.set_viewport(
             screen_position.x,
             screen_position.y,

@@ -4,27 +4,18 @@
 
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 
-use arrow2::array::{Array, UInt64Array};
-
-use polars_core::{
-    prelude::{DataFrame, JoinType},
-    series::Series,
-};
 use rand::Rng;
+
 use re_arrow_store::{
-    polars_util, test_bundle, DataStore, DataStoreConfig, GarbageCollectionTarget, LatestAtQuery,
-    RangeQuery, TimeRange, WriteError,
+    test_row, DataStore, DataStoreConfig, GarbageCollectionTarget, LatestAtQuery, WriteError,
 };
 use re_log_types::{
-    component_types::{ColorRGBA, InstanceKey, Point2D},
+    component_types::InstanceKey,
     datagen::{
         build_frame_nr, build_log_time, build_some_colors, build_some_instances, build_some_point2d,
     },
-    external::arrow2_convert::{
-        deserialize::arrow_array_deserialize_iterator, serialize::TryIntoArrow,
-    },
-    msg_bundle::{wrap_in_listarray, Component as _, ComponentBundle},
-    Duration, EntityPath, MsgId, Time, TimeType, Timeline,
+    external::arrow2_convert::deserialize::arrow_array_deserialize_iterator,
+    Component as _, DataCell, Duration, EntityPath, MsgId, Time, TimeType, Timeline,
 };
 
 // ---
@@ -36,124 +27,51 @@ fn write_errors() {
     let ent_path = EntityPath::from("this/that");
 
     {
-        use arrow2::compute::concatenate::concatenate;
-
-        let mut store = DataStore::new(InstanceKey::name(), Default::default());
-        let mut bundle = test_bundle!(ent_path @
-            [build_frame_nr(32.into()), build_log_time(Time::now())] => [
-                build_some_instances(10), build_some_point2d(10)
-        ]);
-
-        // make instances 2 rows long
-        bundle.components[0] = ComponentBundle::new_from_boxed(
-            bundle.components[0].name(),
-            concatenate(&[
-                bundle.components[0].value_list(),
-                bundle.components[0].value_list(),
-            ])
-            .unwrap()
-            .as_ref(),
-        );
-
-        // The first component of the bundle determines the number of rows for all other
-        // components in there (since it has to match for all of them), so in this case we get a
-        // `MoreThanOneRow` error as the first component is > 1 row.
-        assert!(matches!(
-            store.insert(&bundle),
-            Err(WriteError::MoreThanOneRow(_)),
-        ));
-    }
-
-    {
-        use arrow2::compute::concatenate::concatenate;
-
-        let mut store = DataStore::new(InstanceKey::name(), Default::default());
-        let mut bundle = test_bundle!(ent_path @
-            [build_frame_nr(32.into()), build_log_time(Time::now())] => [
-                build_some_instances(10), build_some_point2d(10)
-        ]);
-
-        // make component 2 rows long
-        bundle.components[1] = ComponentBundle::new_from_boxed(
-            bundle.components[1].name(),
-            concatenate(&[
-                bundle.components[1].value_list(),
-                bundle.components[1].value_list(),
-            ])
-            .unwrap()
-            .as_ref(),
-        );
-
-        // The first component of the bundle determines the number of rows for all other
-        // components in there (since it has to match for all of them), so in this case we get a
-        // `MismatchedRows` error as the first component is 1 row but the 2nd isn't.
-        assert!(matches!(
-            store.insert(&bundle),
-            Err(WriteError::MismatchedRows(_)),
-        ));
-    }
-
-    {
-        pub fn build_sparse_instances() -> ComponentBundle {
-            let ids = wrap_in_listarray(UInt64Array::from(vec![Some(1), None, Some(3)]).boxed());
-            ComponentBundle::new(InstanceKey::name(), ids)
+        pub fn build_sparse_instances() -> DataCell {
+            DataCell::from_component_sparse::<InstanceKey>([Some(1), None, Some(3)])
         }
 
         let mut store = DataStore::new(InstanceKey::name(), Default::default());
-        let bundle = test_bundle!(ent_path @
-            [build_frame_nr(32.into()), build_log_time(Time::now())] => [
+        let row = test_row!(ent_path @
+            [build_frame_nr(32.into()), build_log_time(Time::now())] => 3; [
                 build_sparse_instances(), build_some_point2d(3)
         ]);
         assert!(matches!(
-            store.insert(&bundle),
+            store.insert_row(&row),
             Err(WriteError::SparseClusteringComponent(_)),
         ));
     }
 
     {
-        pub fn build_unsorted_instances() -> ComponentBundle {
-            let ids = wrap_in_listarray(UInt64Array::from_vec(vec![1, 3, 2]).boxed());
-            ComponentBundle::new(InstanceKey::name(), ids)
+        pub fn build_unsorted_instances() -> DataCell {
+            DataCell::from_component::<InstanceKey>([1, 3, 2])
         }
 
-        pub fn build_duped_instances() -> ComponentBundle {
-            let ids = wrap_in_listarray(UInt64Array::from_vec(vec![1, 2, 2]).boxed());
-            ComponentBundle::new(InstanceKey::name(), ids)
+        pub fn build_duped_instances() -> DataCell {
+            DataCell::from_component::<InstanceKey>([1, 2, 2])
         }
 
         let mut store = DataStore::new(InstanceKey::name(), Default::default());
         {
-            let bundle = test_bundle!(ent_path @
-                [build_frame_nr(32.into()), build_log_time(Time::now())] => [
+            let row = test_row!(ent_path @
+                [build_frame_nr(32.into()), build_log_time(Time::now())] => 3; [
                     build_unsorted_instances(), build_some_point2d(3)
             ]);
             assert!(matches!(
-                store.insert(&bundle),
+                store.insert_row(&row),
                 Err(WriteError::InvalidClusteringComponent(_)),
             ));
         }
         {
-            let bundle = test_bundle!(ent_path @
-                [build_frame_nr(32.into()), build_log_time(Time::now())] => [
+            let row = test_row!(ent_path @
+                [build_frame_nr(32.into()), build_log_time(Time::now())] => 3; [
                     build_duped_instances(), build_some_point2d(3)
             ]);
             assert!(matches!(
-                store.insert(&bundle),
+                store.insert_row(&row),
                 Err(WriteError::InvalidClusteringComponent(_)),
             ));
         }
-    }
-
-    {
-        let mut store = DataStore::new(InstanceKey::name(), Default::default());
-        let bundle = test_bundle!(ent_path @
-            [build_frame_nr(32.into()), build_log_time(Time::now())] => [
-                build_some_instances(4), build_some_point2d(3)
-        ]);
-        assert!(matches!(
-            store.insert(&bundle),
-            Err(WriteError::MismatchedInstances { .. }),
-        ));
     }
 }
 
@@ -179,11 +97,9 @@ fn latest_at_emptiness_edge_cases_impl(store: &mut DataStore) {
     let num_instances = 3;
 
     store
-        .insert(
-            &test_bundle!(ent_path @ [build_log_time(now), build_frame_nr(frame40)] => [
-                build_some_instances(num_instances),
-            ]),
-        )
+        .insert_row(&test_row!(ent_path @ [
+                build_log_time(now), build_frame_nr(frame40),
+            ] => num_instances; [build_some_instances(num_instances as _)]))
         .unwrap();
 
     if let err @ Err(_) = store.sanity_check() {
@@ -291,6 +207,7 @@ fn latest_at_emptiness_edge_cases_impl(store: &mut DataStore) {
 // also make sure that, if all else if equal, the primary iterator comes last so that it gathers as
 // much state as possible!
 
+#[cfg(feature = "polars")]
 #[test]
 fn range_join_across_single_row() {
     init_logs();
@@ -301,22 +218,31 @@ fn range_join_across_single_row() {
     }
 }
 
+#[cfg(feature = "polars")]
 fn range_join_across_single_row_impl(store: &mut DataStore) {
+    use arrow2::array::Array;
+    use polars_core::{
+        prelude::{DataFrame, JoinType},
+        series::Series,
+    };
+    use re_log_types::component_types::{ColorRGBA, Point2D};
+    use re_log_types::external::arrow2_convert::serialize::TryIntoArrow as _;
+
     let ent_path = EntityPath::from("this/that");
 
     let points = build_some_point2d(3);
     let colors = build_some_colors(3);
-    let bundle =
-        test_bundle!(ent_path @ [build_frame_nr(42.into())] => [points.clone(), colors.clone()]);
-    store.insert(&bundle).unwrap();
+    let row =
+        test_row!(ent_path @ [build_frame_nr(42.into())] => 3; [points.clone(), colors.clone()]);
+    store.insert_row(&row).unwrap();
 
     let timeline_frame_nr = Timeline::new("frame_nr", TimeType::Sequence);
-    let query = RangeQuery::new(
+    let query = re_arrow_store::RangeQuery::new(
         timeline_frame_nr,
-        TimeRange::new(i64::MIN.into(), i64::MAX.into()),
+        re_arrow_store::TimeRange::new(i64::MIN.into(), i64::MAX.into()),
     );
     let components = [InstanceKey::name(), Point2D::name(), ColorRGBA::name()];
-    let dfs = polars_util::range_components(
+    let dfs = re_arrow_store::polars_util::range_components(
         store,
         &query,
         &ent_path,
@@ -370,10 +296,12 @@ fn gc_correct() {
         for i in 0..num_ents {
             let ent_path = EntityPath::from(format!("this/that/{i}"));
             let num_instances = rng.gen_range(0..=1_000);
-            let bundle = test_bundle!(ent_path @ [build_frame_nr(frame_nr.into())] => [
-                build_some_colors(num_instances),
+            let row = test_row!(ent_path @ [
+                build_frame_nr(frame_nr.into()),
+            ] => num_instances; [
+                build_some_colors(num_instances as _),
             ]);
-            store.insert(&bundle).unwrap();
+            store.insert_row(&row).unwrap();
         }
     }
 
@@ -382,7 +310,7 @@ fn gc_correct() {
         eprintln!("{store}");
         err.unwrap();
     }
-    _ = store.to_dataframe(); // simple way of checking that everything is still readable
+    check_still_readable(&store);
 
     let msg_id_chunks = store.gc(
         GarbageCollectionTarget::DropAtLeastPercentage(1.0),
@@ -402,7 +330,7 @@ fn gc_correct() {
         eprintln!("{store}");
         err.unwrap();
     }
-    _ = store.to_dataframe(); // simple way of checking that everything is still readable
+    check_still_readable(&store);
     for msg_id in &msg_ids {
         assert!(store.get_msg_metadata(msg_id).is_some());
     }
@@ -414,7 +342,7 @@ fn gc_correct() {
         eprintln!("{store}");
         err.unwrap();
     }
-    _ = store.to_dataframe(); // simple way of checking that everything is still readable
+    check_still_readable(&store);
     for msg_id in &msg_ids {
         assert!(store.get_msg_metadata(msg_id).is_none());
     }
@@ -437,9 +365,16 @@ fn gc_correct() {
         eprintln!("{store}");
         err.unwrap();
     }
-    _ = store.to_dataframe(); // simple way of checking that everything is still readable
+    check_still_readable(&store);
 
     assert_eq!(2, store.total_temporal_component_rows());
+}
+
+fn check_still_readable(_store: &DataStore) {
+    #[cfg(feature = "polars")]
+    {
+        _ = _store.to_dataframe(); // simple way of checking that everything is still readable
+    }
 }
 
 // ---

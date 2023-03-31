@@ -32,15 +32,12 @@ re_log_types.workspace = true
 re_log.workspace = true
 
 # External dependencies:
-anyhow.workspace = true
 arrow2 = { workspace = true, features = [
   "compute_concatenate",
   "compute_aggregate",
 ] }
 document-features = "0.2"
-indent = "0.1"
-itertools = "0.10"
-nohash-hasher = "0.2"
+itertools = { workspace = true }
 thiserror.workspace = true
 
 # Optional dependencies:
@@ -53,7 +50,7 @@ polars-core = { workspace = true, optional = true, features = [
 
 [dev-dependencies]
 criterion = "0.4"
-itertools = "0.10"
+itertools = { workspace = true }
 mimalloc.workspace = true
 polars-core = { workspace = true, features = [
   "dtype-date",

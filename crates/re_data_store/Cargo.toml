@@ -32,11 +32,9 @@ re_smart_channel.workspace = true
 re_string_interner.workspace = true
 
 ahash.workspace = true
-anyhow = "1.0"
 document-features = "0.2"
-itertools = "0.10"
+itertools = { workspace = true }
 nohash-hasher = "0.2"
-once_cell = "1.15.0"
 serde = { version = "1", features = ["derive", "rc"], optional = true }
 thiserror = "1.0"
 
@@ -49,6 +47,12 @@ puffin.workspace = true
 criterion = "0.4"
 mimalloc.workspace = true
 rand = "0.8"
+re_log_types = { workspace = true, features = ["load", "save"] }
 
 [lib]
 bench = false
+
+[[example]]
+name = "memory_usage"
+path = "examples/memory_usage.rs"
+required-features = ["re_log_types/load", "re_log_types/save"]

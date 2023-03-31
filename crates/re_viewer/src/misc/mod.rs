@@ -3,6 +3,7 @@ pub mod caches;
 pub mod format_time;
 mod item;
 pub(crate) mod mesh_loader;
+pub mod queries;
 mod selection_state;
 pub(crate) mod space_info;
 pub(crate) mod time_control;
@@ -11,6 +12,8 @@ mod transform_cache;
 mod viewer_context;
 
 pub use caches::Caches;
+
+pub mod instance_hash_conversions;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use clipboard::Clipboard;

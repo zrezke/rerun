@@ -15,21 +15,20 @@ use smallvec::smallvec;
 use crate::{
     allocator::create_and_fill_uniform_buffer_batch,
     depth_offset::DepthOffset,
-    include_file,
-    renderer::OutlineMaskProcessor,
+    draw_phases::{DrawPhase, OutlineMaskProcessor},
+    include_shader_module,
     resource_managers::{GpuTexture2DHandle, ResourceManagerError},
     view_builder::ViewBuilder,
     wgpu_resources::{
         BindGroupDesc, BindGroupEntry, BindGroupLayoutDesc, GpuBindGroup, GpuBindGroupLayoutHandle,
         GpuRenderPipelineHandle, PipelineLayoutDesc, RenderPipelineDesc, SamplerDesc,
-        ShaderModuleDesc,
     },
-    Rgba,
+    OutlineMaskPreference, PickingLayerProcessor, Rgba,
 };
 
 use super::{
-    DrawData, DrawPhase, FileResolver, FileSystem, OutlineMaskPreference, RenderContext, Renderer,
-    SharedRendererData, WgpuResourcePools,
+    DrawData, FileResolver, FileSystem, RenderContext, Renderer, SharedRendererData,
+    WgpuResourcePools,
 };
 
 mod gpu_data {
@@ -190,7 +189,7 @@ impl RectangleDrawData {
                     &ctx.device,
                     &ctx.gpu_resources,
                     &BindGroupDesc {
-                        label: "rectangle".into(),
+                        label: "RectangleInstance::bind_group".into(),
                         entries: smallvec![
                             uniform_buffer,
                             BindGroupEntry::DefaultTextureView(texture.handle),
@@ -209,6 +208,7 @@ impl RectangleDrawData {
 
 pub struct RectangleRenderer {
     render_pipeline_color: GpuRenderPipelineHandle,
+    render_pipeline_picking_layer: GpuRenderPipelineHandle,
     render_pipeline_outline_mask: GpuRenderPipelineHandle,
     bind_group_layout: GpuBindGroupLayoutHandle,
 }
@@ -227,7 +227,7 @@ impl Renderer for RectangleRenderer {
         let bind_group_layout = pools.bind_group_layouts.get_or_create(
             device,
             &BindGroupLayoutDesc {
-                label: "rectangles".into(),
+                label: "RectangleRenderer::bind_group_layout".into(),
                 entries: vec![
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
@@ -267,7 +267,7 @@ impl Renderer for RectangleRenderer {
         let pipeline_layout = pools.pipeline_layouts.get_or_create(
             device,
             &PipelineLayoutDesc {
-                label: "rectangle".into(),
+                label: "RectangleRenderer::pipeline_layout".into(),
                 entries: vec![shared_data.global_bindings.layout, bind_group_layout],
             },
             &pools.bind_group_layouts,
@@ -276,10 +276,7 @@ impl Renderer for RectangleRenderer {
         let shader_module = pools.shader_modules.get_or_create(
             device,
             resolver,
-            &ShaderModuleDesc {
-                label: "rectangle".into(),
-                source: include_file!("../../shader/rectangle.wgsl"),
-            },
+            &include_shader_module!("../../shader/rectangle.wgsl"),
         );
 
         let render_pipeline_desc_color = RenderPipelineDesc {
@@ -310,7 +307,19 @@ impl Renderer for RectangleRenderer {
             &pools.pipeline_layouts,
             &pools.shader_modules,
         );
-
+        let render_pipeline_picking_layer = pools.render_pipelines.get_or_create(
+            device,
+            &RenderPipelineDesc {
+                label: "RectangleRenderer::render_pipeline_picking_layer".into(),
+                fragment_entrypoint: "fs_main_picking_layer".into(),
+                render_targets: smallvec![Some(PickingLayerProcessor::PICKING_LAYER_FORMAT.into())],
+                depth_stencil: PickingLayerProcessor::PICKING_LAYER_DEPTH_STATE,
+                multisample: PickingLayerProcessor::PICKING_LAYER_MSAA_STATE,
+                ..render_pipeline_desc_color.clone()
+            },
+            &pools.pipeline_layouts,
+            &pools.shader_modules,
+        );
         let render_pipeline_outline_mask = pools.render_pipelines.get_or_create(
             device,
             &RenderPipelineDesc {
@@ -329,6 +338,7 @@ impl Renderer for RectangleRenderer {
 
         RectangleRenderer {
             render_pipeline_color,
+            render_pipeline_picking_layer,
             render_pipeline_outline_mask,
             bind_group_layout,
         }
@@ -347,8 +357,9 @@ impl Renderer for RectangleRenderer {
         }
 
         let pipeline_handle = match phase {
-            DrawPhase::OutlineMask => self.render_pipeline_outline_mask,
             DrawPhase::Opaque => self.render_pipeline_color,
+            DrawPhase::PickingLayer => self.render_pipeline_picking_layer,
+            DrawPhase::OutlineMask => self.render_pipeline_outline_mask,
             _ => unreachable!("We were called on a phase we weren't subscribed to: {phase:?}"),
         };
         let pipeline = pools.render_pipelines.get_resource(pipeline_handle)?;
@@ -368,6 +379,10 @@ impl Renderer for RectangleRenderer {
 
     fn participated_phases() -> &'static [DrawPhase] {
         // TODO(andreas): This a hack. We have both opaque and transparent.
-        &[DrawPhase::OutlineMask, DrawPhase::Opaque]
+        &[
+            DrawPhase::OutlineMask,
+            DrawPhase::Opaque,
+            DrawPhase::PickingLayer,
+        ]
     }
 }

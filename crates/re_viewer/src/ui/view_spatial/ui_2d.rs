@@ -5,16 +5,23 @@ use egui::{
 use macaw::IsoTransform;
 use re_data_store::EntityPath;
 use re_log_types::component_types::TensorTrait;
-use re_renderer::view_builder::TargetConfiguration;
+use re_renderer::view_builder::{TargetConfiguration, ViewBuilder};
 
-use super::{eye::Eye, scene::AdditionalPickingInfo, ui::create_labels, ViewSpatialState};
+use super::{
+    eye::Eye,
+    scene::AdditionalPickingInfo,
+    ui::{create_labels, screenshot_context_menu, PICKING_RECT_SIZE},
+    SpatialNavigationMode, ViewSpatialState,
+};
 use crate::{
     misc::{HoveredSpace, Item, SpaceViewHighlights},
     ui::{
         data_ui::{self, DataUi},
         view_spatial::{
             ui::outline_config,
-            ui_renderer_bridge::{create_scene_paint_callback, get_viewport, ScreenBackground},
+            ui_renderer_bridge::{
+                fill_view_builder, get_viewport, renderer_paint_callback, ScreenBackground,
+            },
             SceneSpatial,
         },
         SpaceViewId, UiVerbosity,
@@ -284,6 +291,10 @@ fn view_2d_scrollable(
     let (mut response, painter) =
         parent_ui.allocate_painter(desired_size, egui::Sense::click_and_drag());
 
+    if !response.rect.is_positive() {
+        return response; // protect against problems with zero-sized views
+    }
+
     // Create our transforms.
     let ui_from_space = egui::emath::RectTransform::from_to(scene_rect_accum, response.rect);
     let space_from_ui = ui_from_space.inverse();
@@ -300,6 +311,26 @@ fn view_2d_scrollable(
         fov_y: None,
     };
 
+    let Ok(target_config) = setup_target_config(
+        &painter,
+        space_from_ui,
+        space_from_pixel,
+        &space.to_string(),
+        state.auto_size_config(),
+        scene
+            .primitives
+            .any_outlines,
+    ) else {
+        return response;
+    };
+
+    // TODO(andreas): separate setup for viewbuilder doesn't make sense.
+    let mut view_builder = ViewBuilder::default();
+    if let Err(err) = view_builder.setup_view(ctx.render_ctx, target_config) {
+        re_log::error!("Failed to setup view: {}", err);
+        return response;
+    }
+
     // Create labels now since their shapes participate are added to scene.ui for picking.
     let label_shapes = create_labels(
         &mut scene.ui,
@@ -308,19 +339,41 @@ fn view_2d_scrollable(
         &eye,
         parent_ui,
         highlights,
+        SpatialNavigationMode::TwoD,
     );
+
+    let should_do_hovering = !re_ui::egui_helpers::is_anything_being_dragged(parent_ui.ctx());
 
     // Check if we're hovering any hover primitive.
     let mut depth_at_pointer = None;
-    if let Some(pointer_pos_ui) = response.hover_pos() {
+    if let (true, Some(pointer_pos_ui)) = (should_do_hovering, response.hover_pos()) {
+        // Schedule GPU picking.
+        let pointer_in_pixel = ((pointer_pos_ui - response.rect.left_top())
+            * parent_ui.ctx().pixels_per_point())
+        .round();
+        let _ = view_builder.schedule_picking_rect(
+            ctx.render_ctx,
+            re_renderer::IntRect::from_middle_and_extent(
+                glam::ivec2(pointer_in_pixel.x as i32, pointer_in_pixel.y as i32),
+                glam::uvec2(PICKING_RECT_SIZE, PICKING_RECT_SIZE),
+            ),
+            space_view_id.gpu_readback_id(),
+            (),
+            ctx.app_options.show_picking_debug_overlay,
+        );
+
         let pointer_pos_space = space_from_ui.transform_pos(pointer_pos_ui);
         let hover_radius = space_from_ui.scale().y * 5.0; // TODO(emilk): from egui?
         let picking_result = scene.picking(
+            ctx.render_ctx,
+            space_view_id.gpu_readback_id(),
+            &state.previous_picking_result,
             glam::vec2(pointer_pos_space.x, pointer_pos_space.y),
             &scene_rect_accum,
             &eye,
             hover_radius,
         );
+        state.previous_picking_result = Some(picking_result.clone());
 
         for hit in picking_result.iter_hits() {
             let Some(instance_path) = hit.instance_path_hash.resolve(&ctx.log_db.entity_db)
@@ -411,40 +464,43 @@ fn view_2d_scrollable(
                     .map(|instance_path| Item::InstancePath(Some(space_view_id), instance_path))
             }));
         }
+    } else {
+        state.previous_picking_result = None;
     }
 
     ctx.select_hovered_on_click(&response);
 
     // ------------------------------------------------------------------------
 
+    // Screenshot context menu.
+    let (response, screenshot_mode) = screenshot_context_menu(ctx, response);
+    if let Some(mode) = screenshot_mode {
+        let _ =
+            view_builder.schedule_screenshot(ctx.render_ctx, space_view_id.gpu_readback_id(), mode);
+    }
+
     // Draw a re_renderer driven view.
     // Camera & projection are configured to ingest space coordinates directly.
     {
-        crate::profile_scope!("build command buffer for 2D view {}", space.to_string());
-
-        let Ok(target_config) = setup_target_config(
-            &painter,
-            space_from_ui,
-            space_from_pixel,
-            &space.to_string(),
-            state.auto_size_config(response.rect.size()),
-            scene
-                .primitives
-                .any_outlines,
-        ) else {
-            return response;
-        };
-
-        let Ok(callback) = create_scene_paint_callback(
+        let command_buffer = match fill_view_builder(
             ctx.render_ctx,
-            target_config, painter.clip_rect(),
+            &mut view_builder,
             scene.primitives,
             &ScreenBackground::ClearColor(parent_ui.visuals().extreme_bg_color.into()),
-        ) else {
-            return response;
+        ) {
+            Ok(command_buffer) => command_buffer,
+            Err(err) => {
+                re_log::error!("Failed to fill view builder: {}", err);
+                return response;
+            }
         };
-
-        painter.add(callback);
+        painter.add(renderer_paint_callback(
+            ctx.render_ctx,
+            command_buffer,
+            view_builder,
+            painter.clip_rect(),
+            painter.ctx().pixels_per_point(),
+        ));
     }
 
     project_onto_other_spaces(ctx, space, &response, &space_from_ui, depth_at_pointer);

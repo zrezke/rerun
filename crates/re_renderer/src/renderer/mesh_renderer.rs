@@ -5,25 +5,25 @@
 
 use std::sync::Arc;
 
-use itertools::Itertools as _;
+use ahash::{HashMap, HashMapExt};
 use smallvec::smallvec;
 
 use crate::{
-    include_file,
+    draw_phases::{DrawPhase, OutlineMaskProcessor},
+    include_shader_module,
     mesh::{gpu_data::MaterialUniformBuffer, mesh_vertices, GpuMesh, Mesh},
-    renderer::OutlineMaskProcessor,
-    resource_managers::GpuMeshHandle,
+    resource_managers::{GpuMeshHandle, ResourceHandle},
     view_builder::ViewBuilder,
     wgpu_resources::{
         BindGroupLayoutDesc, BufferDesc, GpuBindGroupLayoutHandle, GpuBuffer,
-        GpuRenderPipelineHandle, PipelineLayoutDesc, RenderPipelineDesc, ShaderModuleDesc,
+        GpuRenderPipelineHandle, PipelineLayoutDesc, RenderPipelineDesc,
     },
-    Color32,
+    Color32, OutlineMaskPreference, PickingLayerId, PickingLayerProcessor,
 };
 
 use super::{
-    DrawData, DrawPhase, FileResolver, FileSystem, OutlineMaskPreference, RenderContext, Renderer,
-    SharedRendererData, WgpuResourcePools,
+    DrawData, FileResolver, FileSystem, RenderContext, Renderer, SharedRendererData,
+    WgpuResourcePools,
 };
 
 mod gpu_data {
@@ -48,6 +48,9 @@ mod gpu_data {
         pub world_from_mesh_normal_row_2: [f32; 3],
 
         pub additive_tint: Color32,
+
+        pub picking_layer_id: [u32; 4],
+
         // Need only the first two bytes, but we want to keep everything aligned to at least 4 bytes.
         pub outline_mask_ids: [u8; 4],
     }
@@ -72,6 +75,9 @@ mod gpu_data {
                         wgpu::VertexFormat::Float32x3,
                         // Tint color
                         wgpu::VertexFormat::Unorm8x4,
+                        // Picking id.
+                        // Again this adds overhead for non-picking passes, more this time. Consider moving this elsewhere.
+                        wgpu::VertexFormat::Uint32x4,
                         // Outline mask.
                         // This adds a tiny bit of overhead to all instances during non-outline pass, but the alternative is having yet another vertex buffer.
                         wgpu::VertexFormat::Uint8x2,
@@ -86,7 +92,9 @@ mod gpu_data {
 #[derive(Clone)]
 struct MeshBatch {
     mesh: GpuMesh,
+
     count: u32,
+
     /// Number of meshes out of `count` which have outlines.
     /// We put all instances with outlines at the start of the instance buffer range.
     count_with_outlines: u32,
@@ -121,6 +129,9 @@ pub struct MeshInstance {
 
     /// Optional outline mask setting for this instance.
     pub outline_mask_ids: OutlineMaskPreference,
+
+    /// Picking layer id.
+    pub picking_layer_id: PickingLayerId,
 }
 
 impl Default for MeshInstance {
@@ -131,6 +142,7 @@ impl Default for MeshInstance {
             world_from_mesh: macaw::Affine3A::IDENTITY,
             additive_tint: Color32::TRANSPARENT,
             outline_mask_ids: OutlineMaskPreference::NONE,
+            picking_layer_id: PickingLayerId::default(),
         }
     }
 }
@@ -166,12 +178,22 @@ impl MeshDrawData {
         let instance_buffer = ctx.gpu_resources.buffers.alloc(
             &ctx.device,
             &BufferDesc {
-                label: "MeshDrawData instance buffer".into(),
+                label: "MeshDrawData::instance_buffer".into(),
                 size: instance_buffer_size,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             },
         );
+
+        let mut instances_by_mesh: HashMap<_, Vec<_>> = HashMap::new();
+        for instance in instances {
+            if !matches!(instance.gpu_mesh, ResourceHandle::Invalid) {
+                instances_by_mesh
+                    .entry(&instance.gpu_mesh)
+                    .or_insert_with(|| Vec::with_capacity(instances.len()))
+                    .push(instance);
+            }
+        }
 
         let mut batches = Vec::new();
         {
@@ -186,13 +208,12 @@ impl MeshDrawData {
 
             let mesh_manager = ctx.mesh_manager.read();
             let mut num_processed_instances = 0;
-            // TODO(#1530) This grouping doesn't seem to do its job correctly. We're not actually batching correctly right now in all cases.
-            for (mesh, instances) in &instances.iter().group_by(|instance| &instance.gpu_mesh) {
+            for (mesh, mut instances) in instances_by_mesh {
                 let mut count = 0;
                 let mut count_with_outlines = 0;
 
                 // Put all instances with outlines at the start of the instance buffer range.
-                let instances = instances.sorted_by(|a, b| {
+                instances.sort_by(|a, b| {
                     a.outline_mask_ids
                         .is_none()
                         .cmp(&b.outline_mask_ids.is_none())
@@ -226,11 +247,13 @@ impl MeshDrawData {
                             .outline_mask_ids
                             .0
                             .map_or([0, 0, 0, 0], |mask| [mask[0], mask[1], 0, 0]),
+                        picking_layer_id: instance.picking_layer_id.into(),
                     });
                 }
                 num_processed_instances += count;
 
-                // We resolve the meshes here already, so the actual draw call doesn't need to know about the MeshManager.
+                // We resolve the meshes here already, so the actual draw call doesn't need to
+                // know about the MeshManager.
                 let mesh = mesh_manager.get(mesh)?;
                 batches.push(MeshBatch {
                     mesh: mesh.clone(),
@@ -240,7 +263,7 @@ impl MeshDrawData {
             }
             assert_eq!(num_processed_instances, instances.len());
             instance_buffer_staging.copy_to_buffer(
-                ctx.active_frame.encoder.lock().get(),
+                ctx.active_frame.before_view_builder_encoder.lock().get(),
                 &instance_buffer,
                 0,
             );
@@ -255,6 +278,7 @@ impl MeshDrawData {
 
 pub struct MeshRenderer {
     render_pipeline_shaded: GpuRenderPipelineHandle,
+    render_pipeline_picking_layer: GpuRenderPipelineHandle,
     render_pipeline_outline_mask: GpuRenderPipelineHandle,
     pub bind_group_layout: GpuBindGroupLayoutHandle,
 }
@@ -263,7 +287,11 @@ impl Renderer for MeshRenderer {
     type RendererDrawData = MeshDrawData;
 
     fn participated_phases() -> &'static [DrawPhase] {
-        &[DrawPhase::Opaque, DrawPhase::OutlineMask]
+        &[
+            DrawPhase::Opaque,
+            DrawPhase::OutlineMask,
+            DrawPhase::PickingLayer,
+        ]
     }
 
     fn create_renderer<Fs: FileSystem>(
@@ -277,7 +305,7 @@ impl Renderer for MeshRenderer {
         let bind_group_layout = pools.bind_group_layouts.get_or_create(
             device,
             &BindGroupLayoutDesc {
-                label: "mesh renderer".into(),
+                label: "MeshRenderer::bind_group_layout".into(),
                 entries: vec![
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
@@ -307,7 +335,7 @@ impl Renderer for MeshRenderer {
         let pipeline_layout = pools.pipeline_layouts.get_or_create(
             device,
             &PipelineLayoutDesc {
-                label: "mesh renderer".into(),
+                label: "MeshRenderer::pipeline_layout".into(),
                 entries: vec![shared_data.global_bindings.layout, bind_group_layout],
             },
             &pools.bind_group_layouts,
@@ -316,10 +344,7 @@ impl Renderer for MeshRenderer {
         let shader_module = pools.shader_modules.get_or_create(
             device,
             resolver,
-            &ShaderModuleDesc {
-                label: "mesh renderer".into(),
-                source: include_file!("../../shader/instanced_mesh.wgsl"),
-            },
+            &include_shader_module!("../../shader/instanced_mesh.wgsl"),
         );
 
         let primitive = wgpu::PrimitiveState {
@@ -333,41 +358,49 @@ impl Renderer for MeshRenderer {
                 .chain(mesh_vertices::vertex_buffer_layouts())
                 .collect();
 
+        let render_pipeline_shaded_desc = RenderPipelineDesc {
+            label: "MeshRenderer::render_pipeline_shaded".into(),
+            pipeline_layout,
+            vertex_entrypoint: "vs_main".into(),
+            vertex_handle: shader_module,
+            fragment_entrypoint: "fs_main_shaded".into(),
+            fragment_handle: shader_module,
+            vertex_buffers,
+            render_targets: smallvec![Some(ViewBuilder::MAIN_TARGET_COLOR_FORMAT.into())],
+            primitive,
+            depth_stencil: ViewBuilder::MAIN_TARGET_DEFAULT_DEPTH_STATE,
+            multisample: ViewBuilder::MAIN_TARGET_DEFAULT_MSAA_STATE,
+        };
         let render_pipeline_shaded = pools.render_pipelines.get_or_create(
             device,
+            &render_pipeline_shaded_desc,
+            &pools.pipeline_layouts,
+            &pools.shader_modules,
+        );
+        let render_pipeline_picking_layer = pools.render_pipelines.get_or_create(
+            device,
             &RenderPipelineDesc {
-                label: "mesh renderer - shaded".into(),
-                pipeline_layout,
-                vertex_entrypoint: "vs_main".into(),
-                vertex_handle: shader_module,
-                fragment_entrypoint: "fs_main_shaded".into(),
-                fragment_handle: shader_module,
-                vertex_buffers: vertex_buffers.clone(),
-                render_targets: smallvec![Some(ViewBuilder::MAIN_TARGET_COLOR_FORMAT.into())],
-                primitive,
-                depth_stencil: ViewBuilder::MAIN_TARGET_DEFAULT_DEPTH_STATE,
-                multisample: ViewBuilder::MAIN_TARGET_DEFAULT_MSAA_STATE,
+                label: "MeshRenderer::render_pipeline_picking_layer".into(),
+                fragment_entrypoint: "fs_main_picking_layer".into(),
+                render_targets: smallvec![Some(PickingLayerProcessor::PICKING_LAYER_FORMAT.into())],
+                depth_stencil: PickingLayerProcessor::PICKING_LAYER_DEPTH_STATE,
+                multisample: PickingLayerProcessor::PICKING_LAYER_MSAA_STATE,
+                ..render_pipeline_shaded_desc.clone()
             },
             &pools.pipeline_layouts,
             &pools.shader_modules,
         );
-
         let render_pipeline_outline_mask = pools.render_pipelines.get_or_create(
             device,
             &RenderPipelineDesc {
-                label: "mesh renderer - outline mask".into(),
-                pipeline_layout,
-                vertex_entrypoint: "vs_main".into(),
-                vertex_handle: shader_module,
+                label: "MeshRenderer::render_pipeline_outline_mask".into(),
                 fragment_entrypoint: "fs_main_outline_mask".into(),
-                fragment_handle: shader_module,
-                vertex_buffers,
                 render_targets: smallvec![Some(OutlineMaskProcessor::MASK_FORMAT.into())],
-                primitive,
                 depth_stencil: OutlineMaskProcessor::MASK_DEPTH_STATE,
                 multisample: OutlineMaskProcessor::mask_default_msaa_state(
                     shared_data.config.hardware_tier,
                 ),
+                ..render_pipeline_shaded_desc
             },
             &pools.pipeline_layouts,
             &pools.shader_modules,
@@ -375,6 +408,7 @@ impl Renderer for MeshRenderer {
 
         MeshRenderer {
             render_pipeline_shaded,
+            render_pipeline_picking_layer,
             render_pipeline_outline_mask,
             bind_group_layout,
         }
@@ -396,6 +430,7 @@ impl Renderer for MeshRenderer {
         let pipeline_handle = match phase {
             DrawPhase::OutlineMask => self.render_pipeline_outline_mask,
             DrawPhase::Opaque => self.render_pipeline_shaded,
+            DrawPhase::PickingLayer => self.render_pipeline_picking_layer,
             _ => unreachable!("We were called on a phase we weren't subscribed to: {phase:?}"),
         };
         let pipeline = pools.render_pipelines.get_resource(pipeline_handle)?;
@@ -420,7 +455,15 @@ impl Renderer for MeshRenderer {
             );
             pass.set_vertex_buffer(
                 2,
-                vertex_buffer_combined.slice(mesh_batch.mesh.vertex_buffer_data_range.clone()),
+                vertex_buffer_combined.slice(mesh_batch.mesh.vertex_buffer_colors_range.clone()),
+            );
+            pass.set_vertex_buffer(
+                3,
+                vertex_buffer_combined.slice(mesh_batch.mesh.vertex_buffer_normals_range.clone()),
+            );
+            pass.set_vertex_buffer(
+                4,
+                vertex_buffer_combined.slice(mesh_batch.mesh.vertex_buffer_texcoord_range.clone()),
             );
             pass.set_index_buffer(
                 index_buffer.slice(mesh_batch.mesh.index_buffer_range.clone()),

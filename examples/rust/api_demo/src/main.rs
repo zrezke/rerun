@@ -82,6 +82,7 @@ fn demo_extension_components(session: &Session) -> anyhow::Result<()> {
     #[derive(arrow2_convert::ArrowField, arrow2_convert::ArrowSerialize)]
     #[arrow_field(transparent)]
     struct Confidence(f32);
+
     impl Component for Confidence {
         fn name() -> ComponentName {
             "ext.confidence".into()
@@ -102,14 +103,17 @@ fn demo_extension_components(session: &Session) -> anyhow::Result<()> {
     #[derive(arrow2_convert::ArrowField, arrow2_convert::ArrowSerialize)]
     #[arrow_field(transparent)]
     struct Corner(String);
+
     impl Component for Corner {
         fn name() -> ComponentName {
             "ext.corner".into()
         }
     }
+
     #[derive(arrow2_convert::ArrowField, arrow2_convert::ArrowSerialize)]
     #[arrow_field(transparent)]
     struct Training(bool);
+
     impl Component for Training {
         fn name() -> ComponentName {
             "ext.training".into()
@@ -591,18 +595,25 @@ fn demo_transforms_3d(session: &Session) -> anyhow::Result<()> {
 enum Demo {
     #[value(name("bbox"))]
     BoundingBox,
+
     #[value(name("extension_components"))]
     ExtensionComponents,
+
     #[value(name("log_cleared"))]
     LogCleared,
+
     #[value(name("3d_points"))]
     Points3D,
+
     #[value(name("rects"))]
     Rects,
+
     #[value(name("segmentation"))]
     Segmentation,
+
     #[value(name("text"))]
     TextLogs,
+
     #[value(name("transforms_3d"))]
     Transforms3D,
 }

@@ -3,8 +3,7 @@ use glam::Mat4;
 use re_data_store::{EntityPath, EntityProperties};
 use re_log_types::{
     component_types::{ColorRGBA, InstanceKey},
-    msg_bundle::Component,
-    Mesh3D,
+    Component, Mesh3D,
 };
 use re_query::{query_primary_with_history, EntityView, QueryError};
 
@@ -60,7 +59,7 @@ impl MeshPart {
                         ctx.render_ctx,
                     )
                     .map(|cpu_mesh| MeshSource {
-                        instance_path_hash: picking_instance_hash,
+                        picking_instance_hash,
                         world_from_mesh: world_from_obj_affine,
                         mesh: cpu_mesh,
                         outline_mask_ids,

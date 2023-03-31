@@ -9,12 +9,26 @@
 var position_data_texture: texture_2d<f32>;
 @group(1) @binding(1)
 var color_texture: texture_2d<f32>;
+@group(1) @binding(2)
+var picking_instance_id_texture: texture_2d<u32>;
+
+struct DrawDataUniformBuffer {
+    radius_boost_in_ui_points: f32,
+    // In actuality there is way more padding than this since we align all our uniform buffers to
+    // 256bytes in order to allow them to be buffer-suballocations.
+    // However, wgpu doesn't know this at this point and therefore requires `DownlevelFlags::BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED`
+    // if we wouldn't add padding here, which isn't available on WebGL.
+    _padding: Vec4,
+};
+@group(1) @binding(3)
+var<uniform> draw_data: DrawDataUniformBuffer;
 
 struct BatchUniformBuffer {
     world_from_obj: Mat4,
     flags: u32,
     _padding: UVec2, // UVec3 would take its own 4xf32 row, UVec2 is on the same as flags
     outline_mask: UVec2,
+    picking_layer_object_id: UVec2,
 };
 @group(2) @binding(0)
 var<uniform> batch: BatchUniformBuffer;
@@ -28,17 +42,36 @@ const ENABLE_SHADING: u32 = 1u;
 var<private> TEXTURE_SIZE: i32 = 2048;
 
 struct VertexOut {
-    @builtin(position) position: Vec4,
-    @location(0) color: Vec4,
-    @location(1) world_position: Vec3,
-    @location(2) point_center: Vec3,
-    @location(3) radius: f32,
+    @builtin(position)
+    position: Vec4,
+
+    @location(0) @interpolate(perspective)
+    world_position: Vec3,
+
+    @location(1) @interpolate(flat)
+    radius: f32,
+
+    @location(2) @interpolate(flat)
+    point_center: Vec3,
+
+    // TODO(andreas): Color & picking layer instance are only used in some passes.
+    // Once we have shader variant support we should remove the unused ones
+    // (it's unclear how good shader compilers are at removing unused outputs and associated texture fetches)
+    // TODO(andreas): Is fetching color & picking layer in the fragment shader maybe more efficient?
+    // Yes, that's more fetches but all of these would be cache hits whereas vertex data pass through can be expensive, (especially on tiler architectures!)
+
+    @location(3) @interpolate(flat)
+    color: Vec4, // linear RGBA with unmulitplied/separate alpha
+
+    @location(4) @interpolate(flat)
+    picking_instance_id: UVec2,
 };
 
 struct PointData {
     pos: Vec3,
     unresolved_radius: f32,
-    color: Vec4
+    color: Vec4,
+    picking_instance_id: UVec2,
 }
 
 // Read and unpack data at a given location
@@ -52,6 +85,7 @@ fn read_data(idx: i32) -> PointData {
     data.pos = pos_4d.xyz / pos_4d.w;
     data.unresolved_radius = position_data.w;
     data.color = color;
+    data.picking_instance_id = textureLoad(picking_instance_id_texture, coord, 0).rg;
     return data;
 }
 
@@ -63,7 +97,7 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOut {
     let point_data = read_data(quad_idx);
 
     // Span quad
-    let quad = sphere_quad_span(vertex_idx, point_data.pos, point_data.unresolved_radius);
+    let quad = sphere_quad_span(vertex_idx, point_data.pos, point_data.unresolved_radius, draw_data.radius_boost_in_ui_points);
 
     // Output, transform to projection space and done.
     var out: VertexOut;
@@ -72,6 +106,7 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOut {
     out.radius = quad.point_resolved_radius;
     out.world_position = quad.pos_in_world;
     out.point_center = point_data.pos;
+    out.picking_instance_id = point_data.picking_instance_id;
 
     return out;
 }
@@ -91,6 +126,15 @@ fn fs_main(in: VertexOut) -> @location(0) Vec4 {
         shading = max(0.4, sqrt(1.2 - distance(in.point_center, in.world_position) / in.radius)); // quick and dirty coloring
     }
     return vec4(in.color.rgb * shading, coverage);
+}
+
+@fragment
+fn fs_main_picking_layer(in: VertexOut) -> @location(0) UVec4 {
+    let coverage = sphere_quad_coverage(in.world_position, in.radius, in.point_center);
+    if coverage <= 0.5 {
+        discard;
+    }
+    return UVec4(batch.picking_layer_object_id, in.picking_instance_id);
 }
 
 @fragment

@@ -4,7 +4,7 @@ use arrow2_convert::deserialize::ArrowDeserialize;
 use arrow2_convert::field::ArrowField;
 use arrow2_convert::{serialize::ArrowSerialize, ArrowDeserialize, ArrowField, ArrowSerialize};
 
-use crate::msg_bundle::Component;
+use crate::Component;
 use crate::{TensorDataType, TensorElement};
 
 use super::arrow_convert_shims::BinaryBuffer;
@@ -172,6 +172,42 @@ pub enum TensorData {
     F32(Buffer<f32>),
     F64(Buffer<f64>),
     JPEG(BinaryBuffer),
+}
+
+impl TensorData {
+    pub fn dtype(&self) -> TensorDataType {
+        match self {
+            Self::U8(_) | Self::JPEG(_) => TensorDataType::U8,
+            Self::U16(_) => TensorDataType::U16,
+            Self::U32(_) => TensorDataType::U32,
+            Self::U64(_) => TensorDataType::U64,
+            Self::I8(_) => TensorDataType::I8,
+            Self::I16(_) => TensorDataType::I16,
+            Self::I32(_) => TensorDataType::I32,
+            Self::I64(_) => TensorDataType::I64,
+            Self::F32(_) => TensorDataType::F32,
+            Self::F64(_) => TensorDataType::F64,
+        }
+    }
+
+    pub fn size_in_bytes(&self) -> usize {
+        match self {
+            Self::U8(buf) | Self::JPEG(buf) => buf.0.len(),
+            Self::U16(buf) => buf.len(),
+            Self::U32(buf) => buf.len(),
+            Self::U64(buf) => buf.len(),
+            Self::I8(buf) => buf.len(),
+            Self::I16(buf) => buf.len(),
+            Self::I32(buf) => buf.len(),
+            Self::I64(buf) => buf.len(),
+            Self::F32(buf) => buf.len(),
+            Self::F64(buf) => buf.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.size_in_bytes() == 0
+    }
 }
 
 /// Flattened `Tensor` data payload
@@ -394,33 +430,11 @@ impl TensorTrait for Tensor {
     }
 
     fn dtype(&self) -> TensorDataType {
-        match &self.data {
-            TensorData::U8(_) | TensorData::JPEG(_) => TensorDataType::U8,
-            TensorData::U16(_) => TensorDataType::U16,
-            TensorData::U32(_) => TensorDataType::U32,
-            TensorData::U64(_) => TensorDataType::U64,
-            TensorData::I8(_) => TensorDataType::I8,
-            TensorData::I16(_) => TensorDataType::I16,
-            TensorData::I32(_) => TensorDataType::I32,
-            TensorData::I64(_) => TensorDataType::I64,
-            TensorData::F32(_) => TensorDataType::F32,
-            TensorData::F64(_) => TensorDataType::F64,
-        }
+        self.data.dtype()
     }
 
     fn size_in_bytes(&self) -> usize {
-        match &self.data {
-            TensorData::U8(buf) | TensorData::JPEG(buf) => buf.0.len(),
-            TensorData::U16(buf) => buf.len(),
-            TensorData::U32(buf) => buf.len(),
-            TensorData::U64(buf) => buf.len(),
-            TensorData::I8(buf) => buf.len(),
-            TensorData::I16(buf) => buf.len(),
-            TensorData::I32(buf) => buf.len(),
-            TensorData::I64(buf) => buf.len(),
-            TensorData::F32(buf) => buf.len(),
-            TensorData::F64(buf) => buf.len(),
-        }
+        self.data.size_in_bytes()
     }
 }
 
@@ -746,61 +760,4 @@ fn test_arrow() {
     let array: Box<dyn arrow2::array::Array> = tensors_in.iter().try_into_arrow().unwrap();
     let tensors_out: Vec<Tensor> = TryIntoCollection::try_into_collection(array).unwrap();
     assert_eq!(tensors_in, tensors_out);
-}
-
-#[test]
-fn test_concat_and_slice() {
-    use crate::msg_bundle::wrap_in_listarray;
-    use arrow2::array::ListArray;
-    use arrow2::compute::concatenate::concatenate;
-    use arrow2_convert::{deserialize::TryIntoCollection, serialize::TryIntoArrow};
-
-    let tensor1 = vec![Tensor {
-        tensor_id: TensorId::random(),
-        shape: vec![TensorDimension {
-            size: 4,
-            name: None,
-        }],
-        data: TensorData::JPEG(vec![1, 2, 3, 4].into()),
-        meaning: TensorDataMeaning::Unknown,
-        meter: Some(1000.0),
-    }];
-
-    let tensor2 = vec![Tensor {
-        tensor_id: TensorId::random(),
-        shape: vec![TensorDimension {
-            size: 4,
-            name: None,
-        }],
-        data: TensorData::JPEG(vec![5, 6, 7, 8].into()),
-        meaning: TensorDataMeaning::Unknown,
-        meter: None,
-    }];
-
-    let array1: Box<dyn arrow2::array::Array> = tensor1.iter().try_into_arrow().unwrap();
-    let list1 = wrap_in_listarray(array1).boxed();
-    let array2: Box<dyn arrow2::array::Array> = tensor2.iter().try_into_arrow().unwrap();
-    let list2 = wrap_in_listarray(array2).boxed();
-
-    let pre_concat = list1
-        .as_any()
-        .downcast_ref::<ListArray<i32>>()
-        .unwrap()
-        .value(0);
-
-    let tensor_out: Vec<Tensor> = TryIntoCollection::try_into_collection(pre_concat).unwrap();
-
-    assert_eq!(tensor1, tensor_out);
-
-    let concat = concatenate(&[list1.as_ref(), list2.as_ref()]).unwrap();
-
-    let slice = concat
-        .as_any()
-        .downcast_ref::<ListArray<i32>>()
-        .unwrap()
-        .value(1);
-
-    let tensor_out: Vec<Tensor> = TryIntoCollection::try_into_collection(slice).unwrap();
-
-    assert_eq!(tensor2[0], tensor_out[0]);
 }

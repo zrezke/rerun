@@ -1,6 +1,6 @@
 use arrow2_convert::{ArrowDeserialize, ArrowField, ArrowSerialize};
 
-use crate::{msg_bundle::Component, ComponentName};
+use crate::{Component, ComponentName};
 
 /// A unique id per [`crate::LogMsg`].
 ///
@@ -19,25 +19,21 @@ use crate::{msg_bundle::Component, ComponentName};
 /// );
 /// ```
 #[derive(
-    Clone,
-    Copy,
-    Debug,
-    Hash,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    ArrowField,
-    ArrowSerialize,
-    ArrowDeserialize,
+    Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, ArrowField, ArrowSerialize, ArrowDeserialize,
 )]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[arrow_field(transparent)]
 pub struct MsgId(re_tuid::Tuid);
 
+impl std::fmt::Debug for MsgId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:032X}", self.0.as_u128())
+    }
+}
+
 impl std::fmt::Display for MsgId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:x}", self.0.as_u128())
+        write!(f, "{:032X}", self.0.as_u128())
     }
 }
 
@@ -57,6 +53,11 @@ impl MsgId {
     #[inline]
     pub fn as_u128(&self) -> u128 {
         self.0.as_u128()
+    }
+
+    #[inline]
+    pub fn nanoseconds_since_epoch(&self) -> u64 {
+        self.0.nanoseconds_since_epoch()
     }
 
     /// A shortened string representation of the message id.

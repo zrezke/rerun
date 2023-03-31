@@ -8,7 +8,7 @@
 //! * See [`DataStore`] for an overview of the core data structures.
 //! * See [`DataStore::latest_at`] and [`DataStore::range`] for the documentation of the public
 //!   read APIs.
-//! * See [`DataStore::insert`] for the documentation of the public write APIs.
+//! * See [`DataStore::insert_row`] for the documentation of the public write APIs.
 //!
 //! ## Feature flags
 #![doc = document_features::document_features!()]
@@ -16,8 +16,10 @@
 
 mod arrow_util;
 mod store;
+mod store_format;
 mod store_gc;
 mod store_read;
+mod store_sanity;
 mod store_stats;
 mod store_write;
 
