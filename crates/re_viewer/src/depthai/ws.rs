@@ -63,11 +63,11 @@ async fn spawn_ws_client(
         } else {
             re_log::error!("Coudln't create websocket");
         }
-        re_log::info!("Websocket closed, retrying in 1 second");
         if shutdown.load(std::sync::atomic::Ordering::SeqCst) {
             re_log::debug!("Shutting down websocket client");
             exit(0);
         }
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
 }
 
