@@ -148,6 +148,7 @@ impl SelectionPanel {
         let mut device_config = ctx.depthai_state.device_config.config.clone();
         let mut subscriptions = ctx.depthai_state.subscriptions.unwrap_or_default().clone();
         let mut depth_enabled = device_config.depth.is_some();
+        let mut depth = device_config.depth.unwrap_or_default();
         ui.vertical(|ui| {
             ui.collapsing("Color Camera", |ui| {
                 ui.vertical(|ui| {
@@ -226,10 +227,12 @@ impl SelectionPanel {
                     });
                 });
             });
-            ui.checkbox(&mut depth_enabled, "Depth");
-            if depth_enabled {
+            ui.checkbox(
+                &mut ctx.depthai_state.device_config.config.depth_enabled,
+                "Depth",
+            );
+            if ctx.depthai_state.device_config.config.depth_enabled {
                 ui.collapsing("Depth", |ui| {
-                    let mut depth = device_config.depth.unwrap_or_default();
                     ui.vertical(|ui| {
                         // ui.horizontal(|ui| {
                         //     ui.label("Default profile preset:");
@@ -256,8 +259,10 @@ impl SelectionPanel {
                             ui.checkbox(&mut subscriptions.point_cloud, "Show Point Cloud");
                         });
                     });
-                    device_config.depth = Some(depth);
                 });
+                device_config.depth = Some(depth);
+            } else {
+                device_config.depth = None;
             }
             ui.vertical(|ui| {
                 ui.label("AI Model:");

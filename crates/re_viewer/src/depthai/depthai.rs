@@ -123,7 +123,7 @@ impl fmt::Display for DepthProfilePreset {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, fmt::Debug)]
 pub enum DepthMedianFilter {
     MEDIAN_OFF,
     KERNEL_3x3,
@@ -137,7 +137,7 @@ impl Default for DepthMedianFilter {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, Default)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, Default, fmt::Debug)]
 pub struct DepthConfig {
     // pub default_profile_preset: DepthProfilePreset,
     // TODO:(filip) add a legit depth config, when sdk is more defined
@@ -149,6 +149,8 @@ pub struct DeviceConfig {
     pub color_camera: ColorCameraConfig,
     pub left_camera: MonoCameraConfig,
     pub right_camera: MonoCameraConfig,
+    #[serde(skip)]
+    pub depth_enabled: bool, // Much easier to have an explicit bool for checkbox
     pub depth: Option<DepthConfig>,
     pub ai_model: AiModel,
 }
@@ -342,6 +344,8 @@ impl State {
                 WsMessageData::Pipeline(config) => {
                     re_log::debug!("Todo handle pipeline configs");
                     self.device_config.config = config;
+                    self.device_config.config.depth_enabled =
+                        self.device_config.config.depth.is_some();
                     self.device_config.update_in_progress = false;
                 }
                 WsMessageData::Device(device) => {
@@ -390,7 +394,7 @@ impl State {
         }
         self.device_config.config = config.clone();
         self.backend_comms.set_pipeline(&self.device_config.config);
-        re_log::info!("Set pipeline");
+        re_log::info!("Creating pipeline...");
         self.device_config.update_in_progress = true;
     }
 }
