@@ -259,6 +259,21 @@ impl SelectionPanel {
                     device_config.depth = Some(depth);
                 });
             }
+            ui.vertical(|ui| {
+                ui.label("AI Model:");
+                egui::ComboBox::from_id_source("ai_model_selection")
+                    .width(70.0)
+                    .selected_text(format!("{}", device_config.ai_model.display_name))
+                    .show_ui(ui, |ui| {
+                        for nn in ctx.depthai_state.neural_networks.iter() {
+                            ui.selectable_value(
+                                &mut device_config.ai_model,
+                                nn.clone(),
+                                &nn.display_name,
+                            );
+                        }
+                    });
+            });
         });
 
         ctx.depthai_state.set_subscriptions(&subscriptions);

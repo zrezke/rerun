@@ -144,12 +144,13 @@ pub struct DepthConfig {
     pub median: DepthMedianFilter,
 }
 
-#[derive(Default, serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
+#[derive(Default, serde::Deserialize, serde::Serialize, Clone, PartialEq)]
 pub struct DeviceConfig {
     pub color_camera: ColorCameraConfig,
     pub left_camera: MonoCameraConfig,
     pub right_camera: MonoCameraConfig,
     pub depth: Option<DepthConfig>,
+    pub ai_model: AiModel,
 }
 
 #[derive(Default, serde::Deserialize, serde::Serialize)]
@@ -193,6 +194,21 @@ impl Default for Device {
     }
 }
 
+#[derive(serde::Deserialize, serde::Serialize, Clone, PartialEq, fmt::Debug)]
+pub struct AiModel {
+    pub path: String,
+    pub display_name: String,
+}
+
+impl Default for AiModel {
+    fn default() -> Self {
+        Self {
+            path: String::from(""),
+            display_name: String::from("No model selected"),
+        }
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct State {
     #[serde(skip)]
@@ -204,11 +220,13 @@ pub struct State {
     #[serde(skip)] // Want to resubscribe to api when app is reloaded
     pub subscriptions: Option<Subscriptions>, // Shown in ui
     previous_subscriptions: Option<Subscriptions>, // Internal, used to recover previous subs and detect changes
+    #[serde(skip)]
     setting_subscriptions: bool,
     #[serde(skip)]
     pub backend_comms: BackendCommChannel,
     #[serde(skip)]
     poll_instant: Option<Instant>,
+    pub neural_networks: Vec<AiModel>,
 }
 
 impl Default for State {
@@ -222,6 +240,17 @@ impl Default for State {
             setting_subscriptions: false,
             backend_comms: BackendCommChannel::default(),
             poll_instant: Some(Instant::now()), // No default for Instant
+            neural_networks: vec![
+                AiModel::default(),
+                AiModel {
+                    path: String::from("yolo-v3-tiny-tf"),
+                    display_name: String::from("Yolo (tiny)"),
+                },
+                AiModel {
+                    path: String::from("face-detection-retail-0004"),
+                    display_name: String::from("Face Detection"),
+                },
+            ],
         }
     }
 }
@@ -345,13 +374,23 @@ impl State {
     }
 
     pub fn set_device_config(&mut self, config: &mut DeviceConfig) {
+        if !self
+            .backend_comms
+            .ws
+            .connected
+            .load(std::sync::atomic::Ordering::SeqCst)
+            || self.selected_device.is_none()
+        {
+            return;
+        }
         config.left_camera.board_socket = BoardSocket::LEFT;
         config.right_camera.board_socket = BoardSocket::RIGHT;
         if self.device_config.config == *config {
             return;
         }
-        self.device_config.config = *config;
+        self.device_config.config = config.clone();
         self.backend_comms.set_pipeline(&self.device_config.config);
+        re_log::info!("Set pipeline");
         self.device_config.update_in_progress = true;
     }
 }

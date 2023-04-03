@@ -19,7 +19,7 @@ impl Default for ApiError {
 
 #[derive(Default)]
 pub struct BackendCommChannel {
-    ws: WebSocket,
+    pub ws: WebSocket,
 }
 
 impl BackendCommChannel {
@@ -57,7 +57,7 @@ impl BackendCommChannel {
         self.ws.send(
             serde_json::to_string(&WsMessage {
                 kind: WsMessageType::Pipeline,
-                data: WsMessageData::Pipeline(*config),
+                data: WsMessageData::Pipeline(config.clone()),
             })
             .unwrap(),
         );
