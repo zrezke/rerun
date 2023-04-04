@@ -228,6 +228,7 @@ pub struct State {
     pub backend_comms: BackendCommChannel,
     #[serde(skip)]
     poll_instant: Option<Instant>,
+    #[serde(default)]
     pub neural_networks: Vec<AiModel>,
 }
 
@@ -251,6 +252,10 @@ impl Default for State {
                 AiModel {
                     path: String::from("face-detection-retail-0004"),
                     display_name: String::from("Face Detection"),
+                },
+                AiModel {
+                    path: String::from("age-gender-recognition-retail-0013"),
+                    display_name: String::from("Age gender recognition"),
                 },
             ],
         }
