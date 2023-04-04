@@ -342,7 +342,6 @@ impl State {
                     self.devices_available = Some(devices);
                 }
                 WsMessageData::Pipeline(config) => {
-                    re_log::debug!("Todo handle pipeline configs");
                     self.device_config.config = config;
                     self.device_config.config.depth_enabled =
                         self.device_config.config.depth.is_some();
@@ -351,6 +350,8 @@ impl State {
                 WsMessageData::Device(device) => {
                     re_log::debug!("Setting device");
                     self.selected_device = Some(device);
+                    self.backend_comms
+                        .set_subscriptions(&self.subscriptions.unwrap_or_default());
                 }
                 _ => {}
             }
