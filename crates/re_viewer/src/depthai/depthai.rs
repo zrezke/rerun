@@ -228,8 +228,30 @@ pub struct State {
     pub backend_comms: BackendCommChannel,
     #[serde(skip)]
     poll_instant: Option<Instant>,
-    #[serde(default)]
+    #[serde(default = "default_neural_networks")]
     pub neural_networks: Vec<AiModel>,
+}
+
+fn default_neural_networks() -> Vec<AiModel> {
+    vec![
+        AiModel::default(),
+        AiModel {
+            path: String::from("yolo-v3-tiny-tf"),
+            display_name: String::from("Yolo (tiny)"),
+        },
+        AiModel {
+            path: String::from("mobilenet-ssd"),
+            display_name: String::from("MobileNet SSD"),
+        },
+        AiModel {
+            path: String::from("face-detection-retail-0004"),
+            display_name: String::from("Face Detection"),
+        },
+        AiModel {
+            path: String::from("age-gender-recognition-retail-0013"),
+            display_name: String::from("Age gender recognition"),
+        },
+    ]
 }
 
 impl Default for State {
@@ -243,21 +265,7 @@ impl Default for State {
             setting_subscriptions: false,
             backend_comms: BackendCommChannel::default(),
             poll_instant: Some(Instant::now()), // No default for Instant
-            neural_networks: vec![
-                AiModel::default(),
-                AiModel {
-                    path: String::from("yolo-v3-tiny-tf"),
-                    display_name: String::from("Yolo (tiny)"),
-                },
-                AiModel {
-                    path: String::from("face-detection-retail-0004"),
-                    display_name: String::from("Face Detection"),
-                },
-                AiModel {
-                    path: String::from("age-gender-recognition-retail-0013"),
-                    display_name: String::from("Age gender recognition"),
-                },
-            ],
+            neural_networks: default_neural_networks(),
         }
     }
 }
