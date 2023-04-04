@@ -11,7 +11,7 @@ use crate::web_viewer::host_web_viewer;
 
 // Note the extra blank lines between the point-lists below: it is required by `clap`.
 
-/// The Rerun Viewer and Server
+/// The Depthai Viewer and Server
 ///
 /// Features:
 ///
@@ -64,7 +64,7 @@ struct Args {
     #[clap(long)]
     profile: bool,
 
-    /// An upper limit on how much memory the Rerun Viewer should use.
+    /// An upper limit on how much memory the Depthai Viewer should use.
     ///
     /// When this limit is used, Rerun will purge the oldest data.
     ///

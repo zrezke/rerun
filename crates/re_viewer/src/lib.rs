@@ -1,6 +1,6 @@
-//! Rerun Viewer GUI.
+//! Depthai Viewer GUI.
 //!
-//! This crate contains all the GUI code for the Rerun Viewer,
+//! This crate contains all the GUI code for the Depthai Viewer,
 //! including all 2D and 3D visualization code.
 
 mod app;
@@ -116,7 +116,7 @@ impl AppEnvironment {
 // ---------------------------------------------------------------------------
 
 #[allow(dead_code)]
-const APPLICATION_NAME: &str = "Rerun Viewer";
+const APPLICATION_NAME: &str = "Depthai Viewer";
 
 pub(crate) fn hardware_tier() -> re_renderer::config::HardwareTier {
     re_renderer::config::HardwareTier::default()

@@ -34,7 +34,7 @@ impl Server {
             .with_context(|| format!("Can't listen on {bind_addr:?}"))?;
 
         re_log::info!(
-            "Listening for websocket traffic on {bind_addr}. Connect with a web Rerun Viewer."
+            "Listening for websocket traffic on {bind_addr}. Connect with a web Depthai Viewer."
         );
 
         Ok(Self { listener })

@@ -149,7 +149,7 @@ pub struct DeviceConfig {
     pub color_camera: ColorCameraConfig,
     pub left_camera: MonoCameraConfig,
     pub right_camera: MonoCameraConfig,
-    #[serde(skip)]
+    #[serde(default)]
     pub depth_enabled: bool, // Much easier to have an explicit bool for checkbox
     pub depth: Option<DepthConfig>,
     pub ai_model: AiModel,
@@ -352,6 +352,8 @@ impl State {
                     self.selected_device = Some(device);
                     self.backend_comms
                         .set_subscriptions(&self.subscriptions.unwrap_or_default());
+                    self.backend_comms.set_pipeline(&self.device_config.config);
+                    self.device_config.update_in_progress = true;
                 }
                 _ => {}
             }
@@ -390,9 +392,6 @@ impl State {
         }
         config.left_camera.board_socket = BoardSocket::LEFT;
         config.right_camera.board_socket = BoardSocket::RIGHT;
-        if self.device_config.config == *config {
-            return;
-        }
         self.device_config.config = config.clone();
         self.backend_comms.set_pipeline(&self.device_config.config);
         re_log::info!("Creating pipeline...");

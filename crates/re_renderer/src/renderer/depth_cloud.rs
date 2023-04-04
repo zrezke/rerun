@@ -552,7 +552,7 @@ impl Renderer for DepthCloudRenderer {
 
             let bind_group = match phase {
                 DrawPhase::OutlineMask => &instance.bind_group_outline,
-                DrawPhase::Opaque => &instance.bind_group_opaque,
+                DrawPhase::Opaque | DrawPhase::PickingLayer => &instance.bind_group_opaque,
                 _ => unreachable!(),
             };
 

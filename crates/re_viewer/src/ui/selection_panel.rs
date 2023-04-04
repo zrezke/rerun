@@ -130,14 +130,22 @@ impl SelectionPanel {
                     "No device selected".to_string()
                 })
                 .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_value(&mut combo_device, -1, "No device")
+                        .changed()
+                    {
+                        ctx.depthai_state.set_device(combo_device);
+                    }
                     for device in available_devices {
-                        ui.selectable_value(&mut combo_device, device, device.to_string());
+                        if ui
+                            .selectable_value(&mut combo_device, device, device.to_string())
+                            .changed()
+                        {
+                            ctx.depthai_state.set_device(combo_device);
+                        }
                     }
                 });
         });
-        if combo_device != -1 {
-            ctx.depthai_state.set_device(combo_device);
-        }
 
         if ctx.depthai_state.device_config.update_in_progress {
             ui.add(egui::Spinner::new());
@@ -149,140 +157,169 @@ impl SelectionPanel {
         let mut subscriptions = ctx.depthai_state.subscriptions.unwrap_or_default().clone();
         let mut depth_enabled = device_config.depth.is_some();
         let mut depth = device_config.depth.unwrap_or_default();
-        ui.vertical(|ui| {
-            ui.collapsing("Color Camera", |ui| {
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Resolution: ");
-                        egui::ComboBox::from_id_source("color_camera_resolution")
-                            .width(70.0)
-                            .selected_text(format!("{}", device_config.color_camera.resolution))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut device_config.color_camera.resolution,
-                                    depthai::ColorCameraResolution::THE_1080_P,
-                                    "1080p",
-                                );
-                                ui.selectable_value(
-                                    &mut device_config.color_camera.resolution,
-                                    depthai::ColorCameraResolution::THE_4_K,
-                                    "4k",
-                                );
-                            });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("FPS: ");
-                        ui.add(egui::DragValue::new(&mut device_config.color_camera.fps));
-                    });
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut subscriptions.color_image, "Show Color camera");
-                    });
-                });
-            });
-            ui.collapsing("Left Mono Camera", |ui| {
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Resolution: ");
-                        egui::ComboBox::from_id_source("left_camera_resolution")
-                            .width(70.0)
-                            .selected_text(format!("{}", device_config.left_camera.resolution))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut device_config.left_camera.resolution,
-                                    depthai::MonoCameraResolution::THE_400_P,
-                                    "400p",
-                                );
-                            });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("FPS: ");
-                        ui.add(egui::DragValue::new(&mut device_config.left_camera.fps));
-                    });
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut subscriptions.left_image, "Show Left Mono camera");
-                    });
-                });
-            });
-            ui.collapsing("Right Mono Camera", |ui| {
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Resolution: ");
-                        egui::ComboBox::from_id_source("right_camera_resolution")
-                            .width(70.0)
-                            .selected_text(format!("{}", device_config.right_camera.resolution))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut device_config.right_camera.resolution,
-                                    depthai::MonoCameraResolution::THE_400_P,
-                                    "400p",
-                                );
-                            });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("FPS: ");
-                        ui.add(egui::DragValue::new(&mut device_config.right_camera.fps));
-                    });
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut subscriptions.right_image, "Show Right Mono camera");
-                    });
-                });
-            });
-            ui.checkbox(
-                &mut ctx.depthai_state.device_config.config.depth_enabled,
-                "Depth",
-            );
-            if ctx.depthai_state.device_config.config.depth_enabled {
-                ui.collapsing("Depth", |ui| {
-                    ui.vertical(|ui| {
-                        // ui.horizontal(|ui| {
-                        //     ui.label("Default profile preset:");
-                        //     egui::ComboBox::from_id_source("depth_default_profile_preset")
-                        //         .width(70.0)
-                        //         .selected_text(format!("{}", depth.default_profile_preset))
-                        //         .show_ui(ui, |ui| {
-                        //             ui.selectable_value(
-                        //                 &mut depth.default_profile_preset,
-                        //                 depthai::DepthProfilePreset::HIGH_DENSITY,
-                        //                 "High Density",
-                        //             );
-                        //             ui.selectable_value(
-                        //                 &mut depth.default_profile_preset,
-                        //                 depthai::DepthProfilePreset::HIGH_ACCURACY,
-                        //                 "High Accuracy",
-                        //             );
-                        //         })
-                        // });
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut subscriptions.depth_image, "Show Depth");
-                        });
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut subscriptions.point_cloud, "Show Point Cloud");
-                        });
-                    });
-                });
-                device_config.depth = Some(depth);
-            } else {
-                device_config.depth = None;
-            }
+        let mut update_device_config = false;
+        ui.add_enabled_ui(combo_device != -1, |ui| {
             ui.vertical(|ui| {
-                ui.label("AI Model:");
-                egui::ComboBox::from_id_source("ai_model_selection")
-                    .width(70.0)
-                    .selected_text(format!("{}", device_config.ai_model.display_name))
-                    .show_ui(ui, |ui| {
-                        for nn in ctx.depthai_state.neural_networks.iter() {
-                            ui.selectable_value(
-                                &mut device_config.ai_model,
-                                nn.clone(),
-                                &nn.display_name,
-                            );
-                        }
+                ui.collapsing("Color Camera", |ui| {
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Resolution: ");
+                            egui::ComboBox::from_id_source("color_camera_resolution")
+                                .width(70.0)
+                                .selected_text(format!("{}", device_config.color_camera.resolution))
+                                .show_ui(ui, |ui| {
+                                    if ui
+                                        .selectable_value(
+                                            &mut device_config.color_camera.resolution,
+                                            depthai::ColorCameraResolution::THE_1080_P,
+                                            "1080p",
+                                        )
+                                        .changed()
+                                    {
+                                        update_device_config = true;
+                                    }
+                                    if ui
+                                        .selectable_value(
+                                            &mut device_config.color_camera.resolution,
+                                            depthai::ColorCameraResolution::THE_4_K,
+                                            "4k",
+                                        )
+                                        .changed()
+                                    {
+                                        update_device_config = true;
+                                    }
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("FPS: ");
+                            if ui
+                                .add(egui::DragValue::new(&mut device_config.color_camera.fps))
+                                .changed()
+                            {
+                                update_device_config = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut subscriptions.color_image, "Show Color camera");
+                        });
                     });
+                });
+                ui.collapsing("Left Mono Camera", |ui| {
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Resolution: ");
+                            egui::ComboBox::from_id_source("left_camera_resolution")
+                                .width(70.0)
+                                .selected_text(format!("{}", device_config.left_camera.resolution))
+                                .show_ui(ui, |ui| {
+                                    if ui
+                                        .selectable_value(
+                                            &mut device_config.left_camera.resolution,
+                                            depthai::MonoCameraResolution::THE_400_P,
+                                            "400p",
+                                        )
+                                        .changed()
+                                    {
+                                        update_device_config = true;
+                                    }
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("FPS: ");
+                            if ui
+                                .add(egui::DragValue::new(&mut device_config.left_camera.fps))
+                                .changed()
+                            {
+                                update_device_config = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut subscriptions.left_image, "Show Left Mono camera");
+                        });
+                    });
+                });
+                ui.collapsing("Right Mono Camera", |ui| {
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Resolution: ");
+                            egui::ComboBox::from_id_source("right_camera_resolution")
+                                .width(70.0)
+                                .selected_text(format!("{}", device_config.right_camera.resolution))
+                                .show_ui(ui, |ui| {
+                                    if ui
+                                        .selectable_value(
+                                            &mut device_config.right_camera.resolution,
+                                            depthai::MonoCameraResolution::THE_400_P,
+                                            "400p",
+                                        )
+                                        .changed()
+                                    {
+                                        update_device_config = true;
+                                    }
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("FPS: ");
+                            if ui
+                                .add(egui::DragValue::new(&mut device_config.right_camera.fps))
+                                .changed()
+                            {
+                                update_device_config = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut subscriptions.right_image, "Show Right Mono camera");
+                        });
+                    });
+                });
+                ui.checkbox(
+                    &mut ctx.depthai_state.device_config.config.depth_enabled,
+                    "Depth",
+                );
+                if ctx.depthai_state.device_config.config.depth_enabled {
+                    ui.collapsing("Depth", |ui| {
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut subscriptions.depth_image, "Show Depth")
+                            });
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut subscriptions.point_cloud, "Show Point Cloud");
+                            });
+                        });
+                    });
+                    if device_config.depth.is_none() {
+                        device_config.depth = Some(depth);
+                        update_device_config = true;
+                    }
+                } else {
+                    device_config.depth = None;
+                }
+                ui.vertical(|ui| {
+                    ui.label("AI Model:");
+                    egui::ComboBox::from_id_source("ai_model_selection")
+                        .width(70.0)
+                        .selected_text(format!("{}", device_config.ai_model.display_name))
+                        .show_ui(ui, |ui| {
+                            for nn in ctx.depthai_state.neural_networks.iter() {
+                                if ui
+                                    .selectable_value(
+                                        &mut device_config.ai_model,
+                                        nn.clone(),
+                                        &nn.display_name,
+                                    )
+                                    .changed()
+                                {
+                                    update_device_config = true;
+                                }
+                            }
+                        });
+                });
             });
+            if update_device_config {
+                ctx.depthai_state.set_device_config(&mut device_config);
+            }
+            ctx.depthai_state.set_subscriptions(&subscriptions);
         });
-
-        ctx.depthai_state.set_subscriptions(&subscriptions);
-        ctx.depthai_state.set_device_config(&mut device_config);
     }
 
     #[allow(clippy::unused_self)]
