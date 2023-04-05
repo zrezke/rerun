@@ -154,7 +154,6 @@ impl SelectionPanel {
 
         // re_log::info!("pipeline_state: {:?}", pipeline_state);
         let mut device_config = ctx.depthai_state.device_config.config.clone();
-        let mut subscriptions = ctx.depthai_state.subscriptions.unwrap_or_default().clone();
         let mut depth_enabled = device_config.depth.is_some();
         let mut depth = device_config.depth.unwrap_or_default();
         let mut update_device_config = false;
@@ -199,9 +198,6 @@ impl SelectionPanel {
                                 update_device_config = true;
                             }
                         });
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut subscriptions.color_image, "Show Color camera");
-                        });
                     });
                 });
                 ui.collapsing("Left Mono Camera", |ui| {
@@ -232,9 +228,6 @@ impl SelectionPanel {
                             {
                                 update_device_config = true;
                             }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut subscriptions.left_image, "Show Left Mono camera");
                         });
                     });
                 });
@@ -267,9 +260,6 @@ impl SelectionPanel {
                                 update_device_config = true;
                             }
                         });
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut subscriptions.right_image, "Show Right Mono camera");
-                        });
                     });
                 });
                 ui.checkbox(
@@ -280,9 +270,6 @@ impl SelectionPanel {
                     ui.collapsing("Depth", |ui| {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
-                                ui.checkbox(&mut subscriptions.depth_image, "Show Depth")
-                            });
-                            ui.horizontal(|ui| {
                                 // TODO(filip): (requires sdk support), make pointcloud configurable in runtime without restarting pipeline, if possible
                                 if ui
                                     .checkbox(&mut depth.pointcloud.enabled, "Point Cloud")
@@ -290,7 +277,7 @@ impl SelectionPanel {
                                 {
                                     update_device_config = true;
                                     device_config.depth = Some(depth);
-                                    subscriptions.point_cloud = depth.pointcloud.enabled;
+                                    // subscriptions.point_cloud = depth.pointcloud.enabled;
                                 }
                             });
                         });
@@ -326,7 +313,6 @@ impl SelectionPanel {
             if update_device_config {
                 ctx.depthai_state.set_device_config(&mut device_config);
             }
-            ctx.depthai_state.set_subscriptions(&subscriptions);
         });
     }
 

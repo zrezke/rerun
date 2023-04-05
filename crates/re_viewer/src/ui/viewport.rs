@@ -114,6 +114,23 @@ impl Viewport {
                     .copied()
                     .collect_vec();
 
+                let visible_space_views = &self.visible;
+                let all_entities = visible_space_views.iter().map(|space_view_id| {
+                    self.space_views
+                        .get(space_view_id)
+                        .unwrap()
+                        .data_blueprint
+                        .entity_paths()
+                });
+                if !self.visible.is_empty() {
+                    ctx.depthai_state.set_subscriptions_from_space_views(
+                        self.space_views
+                            .values()
+                            .filter(|space_view| self.visible.contains(&space_view.id))
+                            .collect_vec(),
+                    );
+                }
+
                 for space_view_id in &space_view_ids {
                     self.space_view_entry_ui(ctx, ui, space_view_id);
                 }
