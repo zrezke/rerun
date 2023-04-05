@@ -142,6 +142,18 @@ pub struct DepthConfig {
     // pub default_profile_preset: DepthProfilePreset,
     // TODO:(filip) add a legit depth config, when sdk is more defined
     pub median: DepthMedianFilter,
+    pub pointcloud: PointcloudConfig,
+}
+
+impl DepthConfig {
+    pub fn default_as_option() -> Option<Self> {
+        Some(Self::default())
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, Default, fmt::Debug)]
+pub struct PointcloudConfig {
+    pub enabled: bool,
 }
 
 #[derive(Default, serde::Deserialize, serde::Serialize, Clone, PartialEq)]
@@ -149,10 +161,16 @@ pub struct DeviceConfig {
     pub color_camera: ColorCameraConfig,
     pub left_camera: MonoCameraConfig,
     pub right_camera: MonoCameraConfig,
-    #[serde(default)]
+    #[serde(default = "bool_true")]
     pub depth_enabled: bool, // Much easier to have an explicit bool for checkbox
+    #[serde(default = "DepthConfig::default_as_option")]
     pub depth: Option<DepthConfig>,
     pub ai_model: AiModel,
+}
+
+#[inline]
+fn bool_true() -> bool {
+    true
 }
 
 #[derive(Default, serde::Deserialize, serde::Serialize)]
@@ -281,6 +299,7 @@ pub enum ChannelId {
     PinholeCamera,
 }
 
+// TODO(filip) Set subsriptions based on tab visibility instead of my own toggle buttons
 #[derive(serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq, Eq, Default, fmt::Debug)]
 pub struct Subscriptions {
     pub color_image: bool,

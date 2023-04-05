@@ -283,7 +283,15 @@ impl SelectionPanel {
                                 ui.checkbox(&mut subscriptions.depth_image, "Show Depth")
                             });
                             ui.horizontal(|ui| {
-                                ui.checkbox(&mut subscriptions.point_cloud, "Show Point Cloud");
+                                // TODO(filip): (requires sdk support), make pointcloud configurable in runtime without restarting pipeline, if possible
+                                if ui
+                                    .checkbox(&mut depth.pointcloud.enabled, "Point Cloud")
+                                    .changed()
+                                {
+                                    update_device_config = true;
+                                    device_config.depth = Some(depth);
+                                    subscriptions.point_cloud = depth.pointcloud.enabled;
+                                }
                             });
                         });
                     });
