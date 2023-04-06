@@ -285,6 +285,14 @@ impl Viewport {
             });
         }
 
+        ctx.depthai_state
+            .entities_to_remove(&entities)
+            .iter()
+            .for_each(|ep| {
+                space_view.data_blueprint.remove_entity(ep);
+                space_view.entities_determined_by_user = true;
+            });
+
         for child_group_handle in &children {
             let Some(child_group) = space_view.data_blueprint.group_mut(*child_group_handle) else {
                 debug_assert!(false, "Data blueprint group {group_name} has an invalid child");

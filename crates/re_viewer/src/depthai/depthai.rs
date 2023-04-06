@@ -343,7 +343,6 @@ lazy_static! {
 
 impl State {
     pub fn entities_to_remove(&mut self, entity_path: &BTreeSet<EntityPath>) -> Vec<EntityPath> {
-        // TODO(filip): Point cloud entity doesn't get removed, fix
         let mut remove_channels = Vec::<ChannelId>::new();
         if let Some(depth) = self.device_config.config.depth {
             if !depth.pointcloud.enabled {
