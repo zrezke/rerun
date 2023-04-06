@@ -147,7 +147,6 @@ impl Default for DepthMedianFilter {
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, Default, fmt::Debug)]
 pub struct DepthConfig {
-    // pub default_profile_preset: DepthProfilePreset,
     // TODO:(filip) add a legit depth config, when sdk is more defined
     pub median: DepthMedianFilter,
     pub pointcloud: PointcloudConfig,
@@ -245,8 +244,9 @@ pub struct State {
     pub selected_device: Option<Device>,
     pub device_config: DeviceConfigState,
 
-    #[serde(skip)] // Want to resubscribe to api when app is reloaded
-    pub subscriptions: Subscriptions, // Shown in ui
+    #[serde(skip, default = "all_subscriptions")]
+    // Want to resubscribe to api when app is reloaded
+    pub subscriptions: Vec<ChannelId>, // Shown in ui
     #[serde(skip)]
     setting_subscriptions: bool,
     #[serde(skip)]
@@ -255,6 +255,16 @@ pub struct State {
     poll_instant: Option<Instant>,
     #[serde(default = "default_neural_networks")]
     pub neural_networks: Vec<AiModel>,
+}
+
+fn all_subscriptions() -> Vec<ChannelId> {
+    vec![
+        ChannelId::ColorImage,
+        ChannelId::LeftMono,
+        ChannelId::RightMono,
+        ChannelId::DepthImage,
+        ChannelId::PointCloud,
+    ]
 }
 
 fn default_neural_networks() -> Vec<AiModel> {
@@ -285,7 +295,7 @@ impl Default for State {
             devices_available: None,
             selected_device: None,
             device_config: DeviceConfigState::default(),
-            subscriptions: Subscriptions::default(),
+            subscriptions: all_subscriptions(),
             setting_subscriptions: false,
             backend_comms: BackendCommChannel::default(),
             poll_instant: Some(Instant::now()), // No default for Instant
@@ -303,54 +313,6 @@ pub enum ChannelId {
     DepthImage,
     PointCloud,
     PinholeCamera,
-}
-
-// TODO(filip) Set subsriptions based on tab visibility instead of my own toggle buttons
-#[derive(serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq, Eq, fmt::Debug)]
-pub struct Subscriptions {
-    pub color_image: bool,
-    pub left_image: bool,
-    pub right_image: bool,
-    pub depth_image: bool,
-    pub point_cloud: bool,
-}
-
-impl Default for Subscriptions {
-    fn default() -> Self {
-        Self {
-            color_image: true,
-            left_image: true,
-            right_image: true,
-            depth_image: true,
-            point_cloud: true,
-        }
-    }
-}
-
-impl Subscriptions {
-    pub fn from_vec(vec: Vec<ChannelId>) -> Self {
-        let mut slf = Self::none();
-        for channel in vec {
-            match channel {
-                ChannelId::ColorImage => slf.color_image = true,
-                ChannelId::LeftMono => slf.left_image = true,
-                ChannelId::RightMono => slf.right_image = true,
-                ChannelId::DepthImage => slf.depth_image = true,
-                ChannelId::PointCloud => slf.point_cloud = true,
-                _ => {}
-            }
-        }
-        slf
-    }
-    pub fn none() -> Self {
-        Self {
-            color_image: false,
-            left_image: false,
-            right_image: false,
-            depth_image: false,
-            point_cloud: false,
-        }
-    }
 }
 
 use lazy_static::lazy_static;
@@ -381,6 +343,7 @@ lazy_static! {
 
 impl State {
     pub fn entities_to_remove(&mut self, entity_path: &BTreeSet<EntityPath>) -> Vec<EntityPath> {
+        // TODO(filip): Point cloud entity doesn't get removed, fix
         let mut remove_channels = Vec::<ChannelId>::new();
         if let Some(depth) = self.device_config.config.depth {
             if !depth.pointcloud.enabled {
@@ -428,6 +391,8 @@ impl State {
             ChannelId::LeftMono,
             ChannelId::RightMono,
         ]);
+
+        // Non default subscriptions
         if self.device_config.config.depth.is_some() {
             possible_subscriptions.push(ChannelId::DepthImage);
             if let Some(depth) = self.device_config.config.depth {
@@ -436,7 +401,8 @@ impl State {
                 }
             }
         }
-        let subscriptions = visibilities
+
+        let mut subscriptions = visibilities
             .iter()
             .filter_map(|(channel, vis)| {
                 if vis.iter().any(|x| *x) {
@@ -446,17 +412,32 @@ impl State {
                 }
                 None
             })
-            .collect();
+            .collect_vec();
 
-        self.set_subscriptions(&Subscriptions::from_vec(subscriptions)); // TODO(filip): Nuke Subscriptions and just use Vec<ChannelId> now that we don't have toggle buttons for visibility
+        // Keep subscriptions that should be visible but have not yet been sent by the backend
+        for channel in all_subscriptions() {
+            if !subscriptions.contains(&channel)
+                && possible_subscriptions.contains(&channel)
+                && self.subscriptions.contains(&channel)
+            {
+                subscriptions.push(channel);
+            }
+        }
+
+        self.set_subscriptions(&subscriptions);
     }
 
-    pub fn set_subscriptions(&mut self, subscriptions: &Subscriptions) {
-        if self.subscriptions == *subscriptions {
+    pub fn set_subscriptions(&mut self, subscriptions: &Vec<ChannelId>) {
+        if self.subscriptions.len() == subscriptions.len()
+            && self
+                .subscriptions
+                .iter()
+                .all(|channel_id| subscriptions.contains(channel_id))
+        {
             return;
         }
         self.backend_comms.set_subscriptions(subscriptions);
-        self.subscriptions = *subscriptions;
+        self.subscriptions = subscriptions.clone();
     }
 
     pub fn get_devices(&mut self) -> Vec<DeviceId> {
@@ -477,19 +458,7 @@ impl State {
             match ws_message.data {
                 WsMessageData::Subscriptions(subscriptions) => {
                     re_log::debug!("Setting subscriptions");
-                    let mut subs = Subscriptions::none();
-                    for sub in subscriptions {
-                        match sub {
-                            ChannelId::ColorImage => subs.color_image = true,
-                            ChannelId::LeftMono => subs.left_image = true,
-                            ChannelId::RightMono => subs.right_image = true,
-                            ChannelId::DepthImage => subs.depth_image = true,
-                            ChannelId::PointCloud => subs.point_cloud = true,
-                            _ => {} // Ignore pinhole camera
-                        }
-                    }
-                    self.subscriptions = subs;
-                    re_log::debug!("Set subscriptions: {:?}", subs);
+                    self.subscriptions = subscriptions;
                 }
                 WsMessageData::Devices(devices) => {
                     re_log::debug!("Setting devices...");
@@ -498,8 +467,10 @@ impl State {
                 WsMessageData::Pipeline(config) => {
                     let mut subs = self.subscriptions.clone();
                     if let Some(depth) = config.depth {
-                        subs.point_cloud = depth.pointcloud.enabled;
-                        subs.depth_image = true;
+                        subs.push(ChannelId::DepthImage);
+                        if depth.pointcloud.enabled {
+                            subs.push(ChannelId::PointCloud);
+                        }
                     }
                     self.device_config.config = config;
                     self.device_config.config.depth_enabled =
