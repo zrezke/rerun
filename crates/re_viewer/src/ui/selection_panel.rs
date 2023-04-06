@@ -270,14 +270,12 @@ impl SelectionPanel {
                     ui.collapsing("Depth", |ui| {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
-                                // TODO(filip): (requires sdk support), make pointcloud configurable in runtime without restarting pipeline, if possible
                                 if ui
                                     .checkbox(&mut depth.pointcloud.enabled, "Point Cloud")
                                     .changed()
                                 {
                                     update_device_config = true;
                                     device_config.depth = Some(depth);
-                                    // subscriptions.point_cloud = depth.pointcloud.enabled;
                                 }
                             });
                         });
@@ -287,7 +285,10 @@ impl SelectionPanel {
                         update_device_config = true;
                     }
                 } else {
-                    device_config.depth = None;
+                    if device_config.depth.is_some() {
+                        device_config.depth = None;
+                        update_device_config = true;
+                    }
                 }
                 ui.vertical(|ui| {
                     ui.label("AI Model:");

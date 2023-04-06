@@ -150,6 +150,10 @@ impl Viewport {
             re_log::warn_once!("Bug: asked to show a ui for a Space View that doesn't exist");
             return;
         };
+        if space_view.data_blueprint.entity_paths().is_empty() {
+            self.remove(space_view_id);
+            return;
+        }
         debug_assert_eq!(space_view.id, *space_view_id);
 
         let mut visibility_changed = false;
@@ -231,6 +235,12 @@ impl Viewport {
         let entities = group.entities.clone();
         let group_name = group.display_name.clone();
         let group_is_visible = group.properties_projected.visible && space_view_visible;
+        ctx.depthai_state
+            .entities_to_remove(&entities)
+            .iter()
+            .for_each(|ep| {
+                space_view.data_blueprint.remove_entity(ep);
+            });
 
         for entity_path in &entities {
             ui.horizontal(|ui| {
