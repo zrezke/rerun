@@ -408,6 +408,7 @@ impl ViewSpatialState {
                 super::view_3d(ctx, ui, self, space, space_view_id, scene, highlights);
             }
             SpatialNavigationMode::TwoD => {
+                self.scene_bbox_accum = self.scene_bbox;
                 let scene_rect_accum = egui::Rect::from_min_max(
                     self.scene_bbox_accum.min.truncate().to_array().into(),
                     self.scene_bbox_accum.max.truncate().to_array().into(),
