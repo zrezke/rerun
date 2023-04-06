@@ -938,6 +938,7 @@ struct AppState {
     /// Configuration for the current recording (found in [`LogDb`]).
     recording_configs: IntMap<RecordingId, RecordingConfig>,
 
+    #[serde(skip)] // Quick fix for subscriptions setting, just don't remembet space views
     blueprints: HashMap<ApplicationId, crate::ui::Blueprint>,
 
     /// Which view panel is currently being shown

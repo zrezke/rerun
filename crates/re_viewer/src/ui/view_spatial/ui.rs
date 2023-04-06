@@ -389,11 +389,13 @@ impl ViewSpatialState {
         highlights: &SpaceViewHighlights,
     ) {
         self.scene_bbox = scene.primitives.bounding_box();
-        if self.scene_bbox_accum.is_nothing() {
-            self.scene_bbox_accum = self.scene_bbox;
-        } else {
-            self.scene_bbox_accum = self.scene_bbox_accum.union(self.scene_bbox);
-        }
+        self.scene_bbox_accum = self.scene_bbox;
+        // This resizes the scene bbox correctly even if it goes from bigger to smaller. Will it cause problems if multiple tensors are displayed? not sure.
+        // if self.scene_bbox_accum.is_nothing() {
+        //     self.scene_bbox_accum = self.scene_bbox;
+        // } else {
+        //     self.scene_bbox_accum = self.scene_bbox_accum.union(self.scene_bbox);
+        // }
 
         if self.nav_mode.is_auto() {
             self.nav_mode = EditableAutoValue::Auto(scene.preferred_navigation_mode(space));
