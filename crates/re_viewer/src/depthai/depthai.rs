@@ -13,12 +13,14 @@ use std::sync::mpsc::channel;
 use std::time::Instant;
 
 #[derive(serde::Deserialize, serde::Serialize, fmt::Debug, PartialEq, Clone, Copy)]
+#[allow(non_camel_case_types)]
 pub enum ColorCameraResolution {
     THE_1080_P,
     THE_4_K,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, fmt::Debug, PartialEq, Clone, Copy)]
+#[allow(non_camel_case_types)]
 pub enum MonoCameraResolution {
     THE_400_P,
 }
@@ -67,6 +69,7 @@ impl fmt::Debug for ColorCameraConfig {
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
+#[allow(non_camel_case_types)]
 pub enum BoardSocket {
     AUTO,
     RGB,
@@ -111,6 +114,7 @@ impl fmt::Debug for MonoCameraConfig {
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
+#[allow(non_camel_case_types)]
 pub enum DepthProfilePreset {
     HIGH_DENSITY,
     HIGH_ACCURACY,
@@ -132,6 +136,7 @@ impl fmt::Display for DepthProfilePreset {
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, fmt::Debug)]
+#[allow(non_camel_case_types)]
 pub enum DepthMedianFilter {
     MEDIAN_OFF,
     KERNEL_3x3,
@@ -206,6 +211,27 @@ impl Default for PipelineResponse {
     fn default() -> Self {
         Self {
             message: "Pipeline not started".to_string(),
+        }
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, fmt::Debug)]
+pub enum ErrorAction {
+    None,
+    FullReset,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, PartialEq, fmt::Debug)]
+pub struct Error {
+    pub action: ErrorAction,
+    pub message: String,
+}
+
+impl Default for Error {
+    fn default() -> Self {
+        Self {
+            action: ErrorAction::None,
+            message: String::from("Invalid message"),
         }
     }
 }
@@ -483,6 +509,16 @@ impl State {
                     self.backend_comms.set_subscriptions(&self.subscriptions);
                     self.backend_comms.set_pipeline(&self.device_config.config);
                     self.device_config.update_in_progress = true;
+                }
+                WsMessageData::Error(error) => {
+                    re_log::error!("Error: {:?}", error.message);
+                    self.device_config.update_in_progress = false;
+                    match error.action {
+                        ErrorAction::None => (),
+                        ErrorAction::FullReset => {
+                            self.set_device(-1);
+                        }
+                    }
                 }
                 _ => {}
             }

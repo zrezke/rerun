@@ -81,7 +81,7 @@ pub enum WsMessageData {
     Devices(Vec<depthai::DeviceId>),
     Device(depthai::Device),
     Pipeline(depthai::DeviceConfig),
-    Error(String),
+    Error(depthai::Error),
 }
 
 #[derive(Deserialize, Serialize, fmt::Debug)]
@@ -149,7 +149,7 @@ impl Default for BackWsMessage {
     fn default() -> Self {
         Self {
             kind: WsMessageType::Error.into(),
-            data: WsMessageData::Error(String::from("Invalid message")),
+            data: WsMessageData::Error(depthai::Error::default()),
         }
     }
 }
