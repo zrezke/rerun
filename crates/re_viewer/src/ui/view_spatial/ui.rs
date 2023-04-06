@@ -389,13 +389,11 @@ impl ViewSpatialState {
         highlights: &SpaceViewHighlights,
     ) {
         self.scene_bbox = scene.primitives.bounding_box();
-        self.scene_bbox_accum = self.scene_bbox;
-        // This resizes the scene bbox correctly even if it goes from bigger to smaller. Will it cause problems if multiple tensors are displayed? not sure.
-        // if self.scene_bbox_accum.is_nothing() {
-        //     self.scene_bbox_accum = self.scene_bbox;
-        // } else {
-        //     self.scene_bbox_accum = self.scene_bbox_accum.union(self.scene_bbox);
-        // }
+        if self.scene_bbox_accum.is_nothing() {
+            self.scene_bbox_accum = self.scene_bbox;
+        } else {
+            self.scene_bbox_accum = self.scene_bbox_accum.union(self.scene_bbox);
+        }
 
         if self.nav_mode.is_auto() {
             self.nav_mode = EditableAutoValue::Auto(scene.preferred_navigation_mode(space));
@@ -410,6 +408,7 @@ impl ViewSpatialState {
                 super::view_3d(ctx, ui, self, space, space_view_id, scene, highlights);
             }
             SpatialNavigationMode::TwoD => {
+                self.scene_bbox_accum = self.scene_bbox;
                 let scene_rect_accum = egui::Rect::from_min_max(
                     self.scene_bbox_accum.min.truncate().to_array().into(),
                     self.scene_bbox_accum.max.truncate().to_array().into(),
