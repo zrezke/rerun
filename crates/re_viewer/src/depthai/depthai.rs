@@ -8,17 +8,19 @@ use crate::ui::SpaceViewId;
 use super::super::ui::SpaceView;
 use super::api::BackendCommChannel;
 use super::ws::{BackWsMessage as WsMessage, WsMessageData, WsMessageType};
+use instant::Instant;
 use std::fmt;
 use std::sync::mpsc::channel;
-use std::time::Instant;
 
 #[derive(serde::Deserialize, serde::Serialize, fmt::Debug, PartialEq, Clone, Copy)]
+#[allow(non_camel_case_types)]
 pub enum ColorCameraResolution {
     THE_1080_P,
     THE_4_K,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, fmt::Debug, PartialEq, Clone, Copy)]
+#[allow(non_camel_case_types)]
 pub enum MonoCameraResolution {
     THE_400_P,
 }
@@ -67,6 +69,7 @@ impl fmt::Debug for ColorCameraConfig {
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
+#[allow(non_camel_case_types)]
 pub enum BoardSocket {
     AUTO,
     RGB,
@@ -111,6 +114,7 @@ impl fmt::Debug for MonoCameraConfig {
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
+#[allow(non_camel_case_types)]
 pub enum DepthProfilePreset {
     HIGH_DENSITY,
     HIGH_ACCURACY,
@@ -132,6 +136,7 @@ impl fmt::Display for DepthProfilePreset {
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, fmt::Debug)]
+#[allow(non_camel_case_types)]
 pub enum DepthMedianFilter {
     MEDIAN_OFF,
     KERNEL_3x3,
@@ -211,6 +216,27 @@ impl Default for PipelineResponse {
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, fmt::Debug)]
+pub enum ErrorAction {
+    None,
+    FullReset,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, PartialEq, fmt::Debug)]
+pub struct Error {
+    pub action: ErrorAction,
+    pub message: String,
+}
+
+impl Default for Error {
+    fn default() -> Self {
+        Self {
+            action: ErrorAction::None,
+            message: String::from("Invalid message"),
+        }
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, fmt::Debug)]
 pub struct Device {
     pub id: DeviceId,
     // Add more fields later
@@ -241,7 +267,7 @@ pub struct State {
     #[serde(skip)]
     devices_available: Option<Vec<DeviceId>>,
     #[serde(skip)]
-    pub selected_device: Option<Device>,
+    pub selected_device: Device,
     pub device_config: DeviceConfigState,
 
     #[serde(skip, default = "all_subscriptions")]
@@ -293,7 +319,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             devices_available: None,
-            selected_device: None,
+            selected_device: Device::default(),
             device_config: DeviceConfigState::default(),
             subscriptions: all_subscriptions(),
             setting_subscriptions: false,
@@ -479,10 +505,20 @@ impl State {
                 }
                 WsMessageData::Device(device) => {
                     re_log::debug!("Setting device");
-                    self.selected_device = Some(device);
+                    self.selected_device = device;
                     self.backend_comms.set_subscriptions(&self.subscriptions);
                     self.backend_comms.set_pipeline(&self.device_config.config);
                     self.device_config.update_in_progress = true;
+                }
+                WsMessageData::Error(error) => {
+                    re_log::error!("Error: {:?}", error.message);
+                    self.device_config.update_in_progress = false;
+                    match error.action {
+                        ErrorAction::None => (),
+                        ErrorAction::FullReset => {
+                            self.set_device(-1);
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -492,7 +528,9 @@ impl State {
             if poll_instant.elapsed().as_secs() < 2 {
                 return;
             }
-            self.backend_comms.get_devices();
+            if self.selected_device.id == -1 {
+                self.backend_comms.get_devices();
+            }
             self.poll_instant = Some(Instant::now());
         } else {
             self.poll_instant = Some(Instant::now());
@@ -500,10 +538,8 @@ impl State {
     }
 
     pub fn set_device(&mut self, device_id: DeviceId) {
-        if let Some(current_device) = self.selected_device {
-            if current_device.id == device_id {
-                return;
-            }
+        if self.selected_device.id == device_id {
+            return;
         }
         re_log::debug!("Setting device: {:?}", device_id);
         self.backend_comms.set_device(device_id);
@@ -515,7 +551,7 @@ impl State {
             .ws
             .connected
             .load(std::sync::atomic::Ordering::SeqCst)
-            || self.selected_device.is_none()
+            || self.selected_device.id == -1
         {
             return;
         }

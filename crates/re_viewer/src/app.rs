@@ -949,12 +949,12 @@ struct AppState {
     selection_panel: crate::selection_panel::SelectionPanel,
     time_panel: crate::time_panel::TimePanel,
 
+    selected_device: depthai::DeviceId,
+    depthai_state: depthai::State,
+
     #[cfg(not(target_arch = "wasm32"))]
     #[serde(skip)]
     profiler: crate::Profiler,
-
-    selected_device: depthai::DeviceId,
-    depthai_state: depthai::State,
 }
 
 impl AppState {
@@ -980,10 +980,10 @@ impl AppState {
             blueprints,
             selection_panel,
             time_panel,
-            #[cfg(not(target_arch = "wasm32"))]
-                profiler: _,
             selected_device,
             depthai_state,
+            #[cfg(not(target_arch = "wasm32"))]
+                profiler: _,
         } = self;
 
         let rec_cfg =

@@ -394,6 +394,7 @@ impl Viewport {
         spaces_info: &SpaceInfoCollection,
     ) {
         crate::profile_function!();
+        // TODO(filip): Add back entities that were removed from the space view if they are available again
 
         for space_view in self.space_views.values_mut() {
             space_view.on_frame_start(ctx, spaces_info);

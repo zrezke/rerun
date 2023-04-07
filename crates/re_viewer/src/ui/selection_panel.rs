@@ -110,11 +110,7 @@ impl SelectionPanel {
 
     fn device_configuration_ui(&mut self, ui: &mut egui::Ui, ctx: &mut ViewerContext<'_>) {
         let mut available_devices = ctx.depthai_state.get_devices();
-        let mut currently_selected_device = ctx
-            .depthai_state
-            .selected_device
-            .clone()
-            .unwrap_or_default();
+        let mut currently_selected_device = ctx.depthai_state.selected_device.clone();
         let mut combo_device: depthai::DeviceId = currently_selected_device.id;
         if currently_selected_device.id != -1 && available_devices.is_empty() {
             available_devices.push(currently_selected_device.id);
