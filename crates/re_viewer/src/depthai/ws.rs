@@ -58,6 +58,7 @@ async fn spawn_ws_client(
                     exit(0);
                 }
                 if let Ok(message) = send_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                    re_log::debug!("Sending message: {:?}", message);
                     sender.send(message);
                 }
             }
@@ -99,11 +100,11 @@ impl Default for WsMessageType {
     }
 }
 
+// TODO(filip): Perhaps add a "message" field to all messages to display toasts
 #[derive(Serialize, fmt::Debug)]
 pub struct BackWsMessage {
     #[serde(rename = "type")]
     pub kind: WsMessageType,
-    // #[serde(deserialize_with = "deserialize_ws_message_data")]
     pub data: WsMessageData,
 }
 
@@ -170,24 +171,41 @@ impl Default for WebSocket {
 
 impl WebSocket {
     pub fn new() -> Self {
+        re_log::debug!("Creating websocket client");
         let (recv_tx, recv_rx) = crossbeam_channel::unbounded();
-        let (send_tx, send_rx) = crossbeam_channel::unbounded();
+        let (send_tx, send_rx) = crossbeam_channel::bounded(2);
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown.clone();
         let connected = Arc::new(AtomicBool::new(false));
         let connected_clone = connected.clone();
-
-        let task = tokio::spawn(spawn_ws_client(
-            recv_tx,
-            send_rx,
-            shutdown_clone,
-            connected_clone,
-        ));
+        let mut task = None;
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            re_log::debug!("Using current tokio runtime");
+            task = Some(handle.spawn(spawn_ws_client(
+                recv_tx,
+                send_rx,
+                shutdown_clone,
+                connected_clone,
+            )));
+        } else {
+            re_log::debug!("Creating new tokio runtime");
+            task = Some(
+                tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .unwrap()
+                    .spawn(spawn_ws_client(
+                        recv_tx,
+                        send_rx,
+                        shutdown_clone,
+                        connected_clone,
+                    )),
+            );
+        }
         Self {
             receiver: recv_rx,
             sender: send_tx,
             shutdown,
-            task,
+            task: task.unwrap(),
             connected,
         }
     }
@@ -219,5 +237,9 @@ impl WebSocket {
     }
     pub fn send(&self, message: String) {
         self.sender.send(WsMessage::Text(message));
+        // TODO(filip): This is a hotfix for the websocket not sending the message
+        // This doesn't actually send any message, but it makes the websocket actually send the message previous msg
+        // It has to be something related to tokio::spawn, because it works fine when just running in the current thread
+        self.sender.send(WsMessage::Text("".to_string()));
     }
 }
