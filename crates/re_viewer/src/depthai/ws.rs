@@ -173,7 +173,7 @@ impl WebSocket {
     pub fn new() -> Self {
         re_log::debug!("Creating websocket client");
         let (recv_tx, recv_rx) = crossbeam_channel::unbounded();
-        let (send_tx, send_rx) = crossbeam_channel::bounded(2);
+        let (send_tx, send_rx) = crossbeam_channel::unbounded();
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown.clone();
         let connected = Arc::new(AtomicBool::new(false));
