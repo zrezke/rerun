@@ -23,6 +23,7 @@ mod class_id;
 mod color;
 pub mod context;
 pub mod coordinates;
+mod imu;
 mod instance_key;
 mod keypoint_id;
 mod label;
@@ -48,6 +49,7 @@ pub use class_id::ClassId;
 pub use color::ColorRGBA;
 pub use context::{AnnotationContext, AnnotationInfo, ClassDescription};
 pub use coordinates::ViewCoordinates;
+pub use imu::ImuData;
 pub use instance_key::InstanceKey;
 pub use keypoint_id::KeypointId;
 pub use label::Label;
@@ -74,7 +76,7 @@ pub use vec::{Vec2D, Vec3D, Vec4D};
 
 lazy_static! {
     //TODO(john): use a run-time type registry
-    static ref FIELDS: [Field; 27] = [
+    static ref FIELDS: [Field; 28] = [
         <AnnotationContext as Component>::field(),
         <Arrow3D as Component>::field(),
         <Box3D as Component>::field(),
@@ -102,6 +104,7 @@ lazy_static! {
         <Vec3D as Component>::field(),
         <ViewCoordinates as Component>::field(),
         <NodeGraph as Component>::field(),
+        <ImuData as Component>::field(),
     ];
 }
 
