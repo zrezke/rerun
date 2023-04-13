@@ -339,6 +339,7 @@ pub enum ChannelId {
     DepthImage,
     PointCloud,
     PinholeCamera,
+    ImuData,
 }
 
 use lazy_static::lazy_static;
@@ -411,13 +412,13 @@ impl State {
             }
         }
 
+        // First add subscriptions that are always possible in terms of ui (no enable/disable buttons for these)
         let mut possible_subscriptions = Vec::<ChannelId>::from([
             ChannelId::ColorImage,
             ChannelId::LeftMono,
             ChannelId::RightMono,
         ]);
-
-        // Non default subscriptions
+        // Now add non default subscriptions
         if self.device_config.config.depth.is_some() {
             possible_subscriptions.push(ChannelId::DepthImage);
             if let Some(depth) = self.device_config.config.depth {

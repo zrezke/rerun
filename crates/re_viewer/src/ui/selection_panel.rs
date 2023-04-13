@@ -1,159 +1,57 @@
-use egui::NumExt as _;
+use egui::{
+    plot::{Line, Plot, PlotPoint, PlotPoints},
+    NumExt as _,
+};
 use itertools::Itertools;
 use poll_promise::Promise;
+use re_arrow_store::{LatestAtQuery, RangeQuery, TimeInt, TimeRange, Timeline};
 use re_data_store::{
     query_latest_single, ColorMap, ColorMapper, EditableAutoValue, EntityPath, EntityProperties,
+    ExtraQueryHistory,
 };
 use re_log_types::{
-    component_types::{Tensor, TensorDataMeaning},
-    TimeType, Transform,
+    component_types::{ImuData, InstanceKey, Tensor, TensorDataMeaning},
+    Component, MsgId, TimeType, Transform,
 };
+use re_query::{query_primary_with_history, QueryError};
 
 use crate::{
     depthai::depthai,
+    misc::SpaceViewHighlights,
     ui::{view_spatial::SpatialNavigationMode, Blueprint},
     Item, UiVerbosity, ViewerContext,
 };
 
-use super::{data_ui::DataUi, space_view::ViewState};
+use egui_dock::{DockArea, Tree};
+
+use super::{data_ui::DataUi, plot_3d, space_view::ViewState, SpaceView, ViewCategory};
+
+use egui::emath::History;
 
 // ---
 
-struct DeviceConfigurationTabViewer {}
-
-pub type Tab = i32;
-
-impl egui_dock::TabViewer for DeviceConfigurationTabViewer {
-    type Tab = Tab;
-
-    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
-        ui.label(format!("Tab {}", tab));
-    }
-
-    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        format!("Tab {}", tab).into()
-    }
+struct DepthaiTabs<'a, 'b> {
+    ctx: &'a mut ViewerContext<'b>,
+    accel_history: &'a mut History<[f32; 3]>,
+    gyro_history: &'a mut History<[f32; 3]>,
+    now: f64, // Now time from beginning
 }
 
-/// The "Selection View" side-bar.
-#[derive(Default, serde::Deserialize, serde::Serialize)]
-#[serde(default)]
-pub(crate) struct SelectionPanel {}
-
-impl SelectionPanel {
-    #[allow(clippy::unused_self)]
-    pub fn show_panel(
-        &mut self,
-        ctx: &mut ViewerContext<'_>,
-        ui: &mut egui::Ui,
-        blueprint: &mut Blueprint,
-    ) {
-        let screen_width = ui.ctx().screen_rect().width();
-
-        let panel = egui::SidePanel::right("selection_view")
-            .min_width(120.0)
-            .default_width((0.45 * screen_width).min(250.0).round())
-            .max_width((0.65 * screen_width).round())
-            .resizable(true)
-            .frame(egui::Frame {
-                fill: ui.style().visuals.panel_fill,
-                ..Default::default()
-            });
-
-        panel.show_animated_inside(
-            ui,
-            blueprint.selection_panel_expanded,
-            |ui: &mut egui::Ui| {
-                egui::TopBottomPanel::top("Device configuration").show_inside(ui, |ui| {
-                    ctx.re_ui
-                        .large_collapsing_header(ui, "Device configuration", true, |ui| {
-                            self.device_configuration_ui(ui, ctx);
-                        })
-                });
-                egui::ScrollArea::both()
-                    .auto_shrink([true; 2])
-                    .show(ui, |ui| {
-                        egui::TopBottomPanel::top("selection_panel_title_bar")
-                            .exact_height(re_ui::ReUi::title_bar_height())
-                            .frame(egui::Frame {
-                                inner_margin: egui::Margin::symmetric(
-                                    re_ui::ReUi::view_padding(),
-                                    0.0,
-                                ),
-                                ..Default::default()
-                            })
-                            .show_inside(ui, |ui| {
-                                if let Some(selection) = ctx
-                                    .rec_cfg
-                                    .selection_state
-                                    .selection_ui(ctx.re_ui, ui, blueprint)
-                                {
-                                    ctx.set_multi_selection(selection.iter().cloned());
-                                }
-                            });
-
-                        egui::ScrollArea::both()
-                            .auto_shrink([true; 2])
-                            .show(ui, |ui| {
-                                egui::Frame {
-                                    inner_margin: egui::Margin::same(re_ui::ReUi::view_padding()),
-                                    ..Default::default()
-                                }
-                                .show(ui, |ui| {
-                                    self.contents(ui, ctx, blueprint);
-                                });
-                            });
-                    });
-            },
-        );
+impl<'a, 'b> DepthaiTabs<'a, 'b> {
+    pub fn new() -> Tree<String> {
+        let config_tab = "Configuration".to_string();
+        let stats_tab = "Stats".to_string();
+        let tree = Tree::new(vec![config_tab, stats_tab]);
+        tree
     }
 
-    fn device_configuration_ui(&mut self, ui: &mut egui::Ui, ctx: &mut ViewerContext<'_>) {
-        let mut available_devices = ctx.depthai_state.get_devices();
-        let mut currently_selected_device = ctx.depthai_state.selected_device.clone();
-        let mut combo_device: depthai::DeviceId = currently_selected_device.id;
-        if currently_selected_device.id != -1 && available_devices.is_empty() {
-            available_devices.push(currently_selected_device.id);
-        }
-
-        ui.horizontal(|ui| {
-            ui.label("Device: ");
-            egui::ComboBox::from_id_source("device")
-                .width(70.0)
-                .selected_text(if combo_device != -1 {
-                    combo_device.to_string()
-                } else {
-                    "No device selected".to_string()
-                })
-                .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_value(&mut combo_device, -1, "No device")
-                        .changed()
-                    {
-                        ctx.depthai_state.set_device(combo_device);
-                    }
-                    for device in available_devices {
-                        if ui
-                            .selectable_value(&mut combo_device, device, device.to_string())
-                            .changed()
-                        {
-                            ctx.depthai_state.set_device(combo_device);
-                        }
-                    }
-                });
-        });
-
-        if ctx.depthai_state.device_config.update_in_progress {
-            ui.add(egui::Spinner::new());
-            return;
-        }
-
+    fn device_configuration_ui(&mut self, ui: &mut egui::Ui) {
         // re_log::info!("pipeline_state: {:?}", pipeline_state);
-        let mut device_config = ctx.depthai_state.device_config.config.clone();
+        let mut device_config = self.ctx.depthai_state.device_config.config.clone();
         let mut depth_enabled = device_config.depth.is_some();
         let mut depth = device_config.depth.unwrap_or_default();
         let mut update_device_config = false;
-        ui.add_enabled_ui(combo_device != -1, |ui| {
+        ui.add_enabled_ui(self.ctx.depthai_state.selected_device.id != -1, |ui| {
             ui.vertical(|ui| {
                 ui.collapsing("Color Camera", |ui| {
                     ui.vertical(|ui| {
@@ -259,10 +157,10 @@ impl SelectionPanel {
                     });
                 });
                 ui.checkbox(
-                    &mut ctx.depthai_state.device_config.config.depth_enabled,
+                    &mut self.ctx.depthai_state.device_config.config.depth_enabled,
                     "Depth",
                 );
-                if ctx.depthai_state.device_config.config.depth_enabled {
+                if self.ctx.depthai_state.device_config.config.depth_enabled {
                     ui.collapsing("Depth", |ui| {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
@@ -292,7 +190,7 @@ impl SelectionPanel {
                         .width(70.0)
                         .selected_text(format!("{}", device_config.ai_model.display_name))
                         .show_ui(ui, |ui| {
-                            for nn in ctx.depthai_state.neural_networks.iter() {
+                            for nn in self.ctx.depthai_state.neural_networks.iter() {
                                 if ui
                                     .selectable_value(
                                         &mut device_config.ai_model,
@@ -308,9 +206,274 @@ impl SelectionPanel {
                 });
             });
             if update_device_config {
-                ctx.depthai_state.set_device_config(&mut device_config);
+                self.ctx.depthai_state.set_device_config(&mut device_config);
             }
         });
+    }
+
+    fn stats_ui(&mut self, ui: &mut egui::Ui) {
+        // Subscribe to IMU data if not already subscribed
+        if !self
+            .ctx
+            .depthai_state
+            .subscriptions
+            .contains(&depthai::ChannelId::ImuData)
+        {
+            let mut subs = self.ctx.depthai_state.subscriptions.clone();
+            subs.push(depthai::ChannelId::ImuData);
+            self.ctx.depthai_state.set_subscriptions(&subs);
+        }
+        ui.vertical(|ui| {
+            let imu_entity_path = &ImuData::entity_path();
+
+            if let Ok(latest) = re_query::query_entity_with_primary::<ImuData>(
+                &self.ctx.log_db.entity_db.data_store,
+                &LatestAtQuery::new(Timeline::log_time(), TimeInt::MAX),
+                imu_entity_path,
+                &[ImuData::name()],
+            ) {
+                latest.visit1(|_inst, imu_data| {
+                    self.accel_history.add(
+                        self.now,
+                        [imu_data.accel.x, imu_data.accel.y, imu_data.accel.z],
+                    )
+                });
+            }
+
+            Plot::new("accel_x").view_aspect(2.0).show(ui, |plot_ui| {
+                plot_ui.line(Line::new(PlotPoints::new(
+                    self.accel_history
+                        .iter()
+                        .map(|(t, v)| [t, v[0].into()])
+                        .collect_vec(),
+                )))
+            });
+            Plot::new("accel_y").view_aspect(2.0).show(ui, |plot_ui| {
+                plot_ui.line(Line::new(PlotPoints::new(
+                    self.accel_history
+                        .iter()
+                        .map(|(t, v)| [t, v[1].into()])
+                        .collect_vec(),
+                )))
+            });
+            Plot::new("accel_z").view_aspect(2.0).show(ui, |plot_ui| {
+                plot_ui.line(Line::new(PlotPoints::new(
+                    self.accel_history
+                        .iter()
+                        .map(|(t, v)| [t, v[2].into()])
+                        .collect_vec(),
+                )))
+            });
+        });
+    }
+}
+
+impl<'a, 'b> egui_dock::TabViewer for DepthaiTabs<'a, 'b> {
+    type Tab = String;
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        match tab.as_str() {
+            "Configuration" => {
+                // Unsubscribe from IMU data if subscribed
+                if self
+                    .ctx
+                    .depthai_state
+                    .subscriptions
+                    .contains(&depthai::ChannelId::ImuData)
+                {
+                    let mut subs = self
+                        .ctx
+                        .depthai_state
+                        .subscriptions
+                        .iter()
+                        .filter_map(|x| {
+                            if x != &depthai::ChannelId::ImuData {
+                                return Some(x.clone());
+                            } else {
+                                return None;
+                            }
+                        })
+                        .collect_vec();
+                    self.ctx.depthai_state.set_subscriptions(&subs);
+                }
+                self.device_configuration_ui(ui);
+            }
+            "Stats" => {
+                self.stats_ui(ui);
+            }
+            _ => {}
+        }
+        ui.label(tab.as_str());
+    }
+
+    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+        tab.as_str().into()
+    }
+}
+
+/// The "Selection View" side-bar.
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub(crate) struct SelectionPanel {
+    #[serde(skip)]
+    depthai_tabs: Tree<String>,
+    #[serde(skip)]
+    accel_history: History<[f32; 3]>,
+    #[serde(skip)]
+    gyro_history: History<[f32; 3]>,
+    #[serde(skip)]
+    start_time: instant::Instant,
+}
+
+impl Default for SelectionPanel {
+    fn default() -> Self {
+        Self {
+            depthai_tabs: DepthaiTabs::new(),
+            accel_history: History::new(0..1000, 5.0),
+            gyro_history: History::new(0..1000, 5.0),
+            start_time: instant::Instant::now(),
+        }
+    }
+}
+
+impl SelectionPanel {
+    #[allow(clippy::unused_self)]
+    pub fn show_panel(
+        &mut self,
+        ctx: &mut ViewerContext<'_>,
+        ui: &mut egui::Ui,
+        blueprint: &mut Blueprint,
+    ) {
+        let screen_width = ui.ctx().screen_rect().width();
+
+        let panel = egui::SidePanel::right("selection_view")
+            .min_width(120.0)
+            .default_width((0.45 * screen_width).min(250.0).round())
+            .max_width((0.65 * screen_width).round())
+            .resizable(true)
+            .frame(egui::Frame {
+                fill: ui.style().visuals.panel_fill,
+                ..Default::default()
+            });
+
+        panel.show_animated_inside(
+            ui,
+            blueprint.selection_panel_expanded,
+            |ui: &mut egui::Ui| {
+                egui::TopBottomPanel::top("Device configuration")
+                    .resizable(true)
+                    .show_inside(ui, |ui| {
+                        // let mut sv = SpaceView::new(
+                        //     ViewCategory::Spatial,
+                        //     &EntityPath::from("plot/"),
+                        //     &[EntityPath::from("plot/")],
+                        // );
+                        // sv.scene_ui(
+                        //     ctx,
+                        //     ui,
+                        //     TimeInt::from_seconds(0),
+                        //     &SpaceViewHighlights::default(),
+                        // );
+
+                        // let mut plot = plot_3d::Plot3D::default();
+                        // plot.add_point(plot_3d::Point3D::default());
+                        // plot.ui(ctx, ui);
+                        let mut available_devices = ctx.depthai_state.get_devices();
+                        let mut currently_selected_device =
+                            ctx.depthai_state.selected_device.clone();
+                        let mut combo_device: depthai::DeviceId = currently_selected_device.id;
+                        if currently_selected_device.id != -1 && available_devices.is_empty() {
+                            available_devices.push(currently_selected_device.id);
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("Device: ");
+                            egui::ComboBox::from_id_source("device")
+                                .width(70.0)
+                                .selected_text(if combo_device != -1 {
+                                    combo_device.to_string()
+                                } else {
+                                    "No device selected".to_string()
+                                })
+                                .show_ui(ui, |ui| {
+                                    if ui
+                                        .selectable_value(&mut combo_device, -1, "No device")
+                                        .changed()
+                                    {
+                                        ctx.depthai_state.set_device(combo_device);
+                                    }
+                                    for device in available_devices {
+                                        if ui
+                                            .selectable_value(
+                                                &mut combo_device,
+                                                device,
+                                                device.to_string(),
+                                            )
+                                            .changed()
+                                        {
+                                            ctx.depthai_state.set_device(combo_device);
+                                        }
+                                    }
+                                });
+                        });
+
+                        if ctx.depthai_state.device_config.update_in_progress {
+                            ui.add(egui::Spinner::new());
+                            return;
+                        }
+                        ui.scope(|ui| {
+                            DockArea::new(&mut self.depthai_tabs)
+                                .style(re_ui::egui_dock_style(ui.style()))
+                                .show_inside(
+                                    ui,
+                                    &mut DepthaiTabs {
+                                        ctx,
+                                        accel_history: &mut self.accel_history,
+                                        gyro_history: &mut self.gyro_history,
+                                        now: self.start_time.elapsed().as_nanos() as f64 / 1e9,
+                                    },
+                                );
+                            // TODO(filip): Sometimes tabs use an already used ui id
+                        });
+
+                        egui::ScrollArea::both()
+                            .auto_shrink([true; 2])
+                            .show(ui, |ui| {
+                                egui::TopBottomPanel::top("selection_panel_title_bar")
+                                    .exact_height(re_ui::ReUi::title_bar_height())
+                                    .frame(egui::Frame {
+                                        inner_margin: egui::Margin::symmetric(
+                                            re_ui::ReUi::view_padding(),
+                                            0.0,
+                                        ),
+                                        ..Default::default()
+                                    })
+                                    .show_inside(ui, |ui| {
+                                        if let Some(selection) = ctx
+                                            .rec_cfg
+                                            .selection_state
+                                            .selection_ui(ctx.re_ui, ui, blueprint)
+                                        {
+                                            ctx.set_multi_selection(selection.iter().cloned());
+                                        }
+                                    });
+
+                                egui::ScrollArea::both()
+                                    .auto_shrink([true; 2])
+                                    .show(ui, |ui| {
+                                        egui::Frame {
+                                            inner_margin: egui::Margin::same(
+                                                re_ui::ReUi::view_padding(),
+                                            ),
+                                            ..Default::default()
+                                        }
+                                        .show(ui, |ui| {
+                                            self.contents(ui, ctx, blueprint);
+                                        });
+                                    });
+                            });
+                    });
+            },
+        );
     }
 
     #[allow(clippy::unused_self)]
