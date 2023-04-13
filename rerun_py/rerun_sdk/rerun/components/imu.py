@@ -17,7 +17,7 @@ class Imu(pa.ExtensionArray):  # type: ignore[misc]
         gyro_point = Point3DArray.from_numpy(gyro.reshape(1, 3))
         quat = QuaternionArray.from_numpy(np.array([0, 0, 0, 1], dtype=np.float32).reshape(1, 4))
         return pa.StructArray.from_arrays(  # type: ignore[no-any-return]
-            names=["accel", "gyro", "orientation"],
+            fields=ImuType.storage_type,
             arrays=[accel_point, gyro_point, quat],
         )
 

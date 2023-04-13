@@ -7,7 +7,7 @@ import numpy as np
 
 
 @log_decorator
-def log_imu(entity_path: str, accel: npt.ArrayLike, gyro: npt.ArrayLike, timeless: bool = False) -> None:
+def log_imu(accel: npt.ArrayLike, gyro: npt.ArrayLike, timeless: bool = False) -> None:
     """
     Log an IMU sensor reading.
 
@@ -37,4 +37,5 @@ def log_imu(entity_path: str, accel: npt.ArrayLike, gyro: npt.ArrayLike, timeles
         raise ValueError(f"Angular velocity vector must have a length of 3, got: {gyro.size}")
 
     instanced["rerun.imu"] = Imu.create(accel, gyro)
-    bindings.log_arrow_msg(entity_path, components=instanced, timeless=timeless)
+    # Fixed imu entity path
+    bindings.log_arrow_msg("imu_data", components=instanced, timeless=timeless)
