@@ -22,7 +22,7 @@ use crate::{
     Item, UiVerbosity, ViewerContext,
 };
 
-use egui_dock::{DockArea, Tree};
+use egui_dock::{DockArea, NodeIndex, Tree};
 
 use super::{data_ui::DataUi, plot_3d, space_view::ViewState, SpaceView, ViewCategory};
 
@@ -30,15 +30,62 @@ use egui::emath::History;
 
 // ---
 
+#[derive(Debug, Copy, Clone)]
+enum XYZ {
+    X,
+    Y,
+    Z,
+}
+
+#[derive(Debug, Copy, Clone)]
+enum ImuTabKind {
+    Accel,
+    Gyro,
+}
+
+struct ImuXyzTabs<'a> {
+    kind: ImuTabKind,
+    data: &'a mut History<[f32; 3]>,
+}
+
+impl<'a> ImuXyzTabs<'a> {
+    fn tree() -> Tree<XYZ> {
+        let mut tree = Tree::new(vec![XYZ::X]);
+        let [_, y_node] = tree.split_right(NodeIndex::root(), 1.0 / 3.0, vec![XYZ::Y]);
+        tree.split_right(y_node, 0.5, vec![XYZ::Z]);
+        tree
+    }
+}
+
+impl<'a> egui_dock::TabViewer for ImuXyzTabs<'a> {
+    type Tab = XYZ;
+
+    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+        format!("{:?} ({tab:?})", self.kind).into()
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        Plot::new(format!("{:?} ({tab:?})", self.kind)).show(ui, |plot_ui| {
+            plot_ui.line(Line::new(PlotPoints::new(
+                self.data
+                    .iter()
+                    .map(|(t, v)| [t, v[*tab as usize].into()])
+                    .collect_vec(),
+            )))
+        });
+    }
+}
+
 struct DepthaiTabs<'a, 'b> {
     ctx: &'a mut ViewerContext<'b>,
     accel_history: &'a mut History<[f32; 3]>,
     gyro_history: &'a mut History<[f32; 3]>,
-    now: f64, // Now time from beginning
+    now: f64, // Time elapsed from spawning SelectionPanel
+    imu_accel_tabs: &'a mut Tree<XYZ>,
 }
 
 impl<'a, 'b> DepthaiTabs<'a, 'b> {
-    pub fn new() -> Tree<String> {
+    pub fn tree() -> Tree<String> {
         let config_tab = "Configuration".to_string();
         let stats_tab = "Stats".to_string();
         let tree = Tree::new(vec![config_tab, stats_tab]);
@@ -212,57 +259,60 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
     }
 
     fn stats_ui(&mut self, ui: &mut egui::Ui) {
-        // Subscribe to IMU data if not already subscribed
-        if !self
-            .ctx
-            .depthai_state
-            .subscriptions
-            .contains(&depthai::ChannelId::ImuData)
-        {
-            let mut subs = self.ctx.depthai_state.subscriptions.clone();
-            subs.push(depthai::ChannelId::ImuData);
-            self.ctx.depthai_state.set_subscriptions(&subs);
+        let imu_entity_path = &ImuData::entity_path();
+
+        if let Ok(latest) = re_query::query_entity_with_primary::<ImuData>(
+            &self.ctx.log_db.entity_db.data_store,
+            &LatestAtQuery::new(Timeline::log_time(), TimeInt::MAX),
+            imu_entity_path,
+            &[ImuData::name()],
+        ) {
+            latest.visit1(|_inst, imu_data| {
+                self.accel_history.add(
+                    self.now,
+                    [imu_data.accel.x, imu_data.accel.y, imu_data.accel.z],
+                );
+                self.gyro_history.add(
+                    self.now,
+                    [imu_data.gyro.x, imu_data.gyro.y, imu_data.gyro.z],
+                );
+            });
         }
-        ui.vertical(|ui| {
-            let imu_entity_path = &ImuData::entity_path();
 
-            if let Ok(latest) = re_query::query_entity_with_primary::<ImuData>(
-                &self.ctx.log_db.entity_db.data_store,
-                &LatestAtQuery::new(Timeline::log_time(), TimeInt::MAX),
-                imu_entity_path,
-                &[ImuData::name()],
-            ) {
-                latest.visit1(|_inst, imu_data| {
-                    self.accel_history.add(
-                        self.now,
-                        [imu_data.accel.x, imu_data.accel.y, imu_data.accel.z],
-                    )
+        ui.collapsing("Imu values", |ui| {
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                egui::TopBottomPanel::top("accel_panel")
+                    .resizable(true)
+                    .default_height(150.0)
+                    .show_separator_line(true)
+                    .show_inside(ui, |ui| {
+                        ui.scope(|ui| {
+                            ui.label("Accelerometer");
+                            DockArea::new(&mut self.imu_accel_tabs)
+                                .id(egui::Id::new("accel_tabs"))
+                                .style(re_ui::egui_dock_style(ui.style()))
+                                .show_inside(
+                                    ui,
+                                    &mut ImuXyzTabs {
+                                        data: &mut self.accel_history,
+                                        kind: ImuTabKind::Accel,
+                                    },
+                                );
+                        });
+                    });
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    ui.label("Gyroscope");
+                    DockArea::new(&mut self.imu_accel_tabs)
+                        .id(egui::Id::new("gyro_tabs"))
+                        .style(re_ui::egui_dock_style(ui.style()))
+                        .show_inside(
+                            ui,
+                            &mut ImuXyzTabs {
+                                data: &mut self.gyro_history,
+                                kind: ImuTabKind::Gyro,
+                            },
+                        );
                 });
-            }
-
-            Plot::new("accel_x").view_aspect(2.0).show(ui, |plot_ui| {
-                plot_ui.line(Line::new(PlotPoints::new(
-                    self.accel_history
-                        .iter()
-                        .map(|(t, v)| [t, v[0].into()])
-                        .collect_vec(),
-                )))
-            });
-            Plot::new("accel_y").view_aspect(2.0).show(ui, |plot_ui| {
-                plot_ui.line(Line::new(PlotPoints::new(
-                    self.accel_history
-                        .iter()
-                        .map(|(t, v)| [t, v[1].into()])
-                        .collect_vec(),
-                )))
-            });
-            Plot::new("accel_z").view_aspect(2.0).show(ui, |plot_ui| {
-                plot_ui.line(Line::new(PlotPoints::new(
-                    self.accel_history
-                        .iter()
-                        .map(|(t, v)| [t, v[2].into()])
-                        .collect_vec(),
-                )))
             });
         });
     }
@@ -295,15 +345,27 @@ impl<'a, 'b> egui_dock::TabViewer for DepthaiTabs<'a, 'b> {
                         })
                         .collect_vec();
                     self.ctx.depthai_state.set_subscriptions(&subs);
+                    self.accel_history.clear();
+                    self.gyro_history.clear();
                 }
                 self.device_configuration_ui(ui);
             }
             "Stats" => {
+                // Subscribe to IMU data if not already subscribed
+                if !self
+                    .ctx
+                    .depthai_state
+                    .subscriptions
+                    .contains(&depthai::ChannelId::ImuData)
+                {
+                    let mut subs = self.ctx.depthai_state.subscriptions.clone();
+                    subs.push(depthai::ChannelId::ImuData);
+                    self.ctx.depthai_state.set_subscriptions(&subs);
+                }
                 self.stats_ui(ui);
             }
             _ => {}
         }
-        ui.label(tab.as_str());
     }
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
@@ -318,6 +380,8 @@ pub(crate) struct SelectionPanel {
     #[serde(skip)]
     depthai_tabs: Tree<String>,
     #[serde(skip)]
+    imu_accel_tabs: Tree<XYZ>,
+    #[serde(skip)]
     accel_history: History<[f32; 3]>,
     #[serde(skip)]
     gyro_history: History<[f32; 3]>,
@@ -328,7 +392,8 @@ pub(crate) struct SelectionPanel {
 impl Default for SelectionPanel {
     fn default() -> Self {
         Self {
-            depthai_tabs: DepthaiTabs::new(),
+            depthai_tabs: DepthaiTabs::tree(),
+            imu_accel_tabs: ImuXyzTabs::tree(),
             accel_history: History::new(0..1000, 5.0),
             gyro_history: History::new(0..1000, 5.0),
             start_time: instant::Instant::now(),
@@ -360,24 +425,11 @@ impl SelectionPanel {
             ui,
             blueprint.selection_panel_expanded,
             |ui: &mut egui::Ui| {
+                // TODO(filip): Fix this panel resizing to minimum after spinner
                 egui::TopBottomPanel::top("Device configuration")
                     .resizable(true)
+                    .min_height(200.0)
                     .show_inside(ui, |ui| {
-                        // let mut sv = SpaceView::new(
-                        //     ViewCategory::Spatial,
-                        //     &EntityPath::from("plot/"),
-                        //     &[EntityPath::from("plot/")],
-                        // );
-                        // sv.scene_ui(
-                        //     ctx,
-                        //     ui,
-                        //     TimeInt::from_seconds(0),
-                        //     &SpaceViewHighlights::default(),
-                        // );
-
-                        // let mut plot = plot_3d::Plot3D::default();
-                        // plot.add_point(plot_3d::Point3D::default());
-                        // plot.ui(ctx, ui);
                         let mut available_devices = ctx.depthai_state.get_devices();
                         let mut currently_selected_device =
                             ctx.depthai_state.selected_device.clone();
@@ -422,6 +474,7 @@ impl SelectionPanel {
                         }
                         ui.scope(|ui| {
                             DockArea::new(&mut self.depthai_tabs)
+                                .id(egui::Id::new("depthai_tabs"))
                                 .style(re_ui::egui_dock_style(ui.style()))
                                 .show_inside(
                                     ui,
@@ -430,48 +483,42 @@ impl SelectionPanel {
                                         accel_history: &mut self.accel_history,
                                         gyro_history: &mut self.gyro_history,
                                         now: self.start_time.elapsed().as_nanos() as f64 / 1e9,
+                                        imu_accel_tabs: &mut self.imu_accel_tabs,
                                     },
                                 );
                             // TODO(filip): Sometimes tabs use an already used ui id
                         });
-
-                        egui::ScrollArea::both()
-                            .auto_shrink([true; 2])
-                            .show(ui, |ui| {
-                                egui::TopBottomPanel::top("selection_panel_title_bar")
-                                    .exact_height(re_ui::ReUi::title_bar_height())
-                                    .frame(egui::Frame {
-                                        inner_margin: egui::Margin::symmetric(
-                                            re_ui::ReUi::view_padding(),
-                                            0.0,
-                                        ),
-                                        ..Default::default()
-                                    })
-                                    .show_inside(ui, |ui| {
-                                        if let Some(selection) = ctx
-                                            .rec_cfg
-                                            .selection_state
-                                            .selection_ui(ctx.re_ui, ui, blueprint)
-                                        {
-                                            ctx.set_multi_selection(selection.iter().cloned());
-                                        }
-                                    });
-
-                                egui::ScrollArea::both()
-                                    .auto_shrink([true; 2])
-                                    .show(ui, |ui| {
-                                        egui::Frame {
-                                            inner_margin: egui::Margin::same(
-                                                re_ui::ReUi::view_padding(),
-                                            ),
-                                            ..Default::default()
-                                        }
-                                        .show(ui, |ui| {
-                                            self.contents(ui, ctx, blueprint);
-                                        });
-                                    });
-                            });
                     });
+
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    egui::TopBottomPanel::top("selection_panel_title_bar")
+                        .exact_height(re_ui::ReUi::title_bar_height())
+                        .frame(egui::Frame {
+                            inner_margin: egui::Margin::symmetric(re_ui::ReUi::view_padding(), 0.0),
+                            ..Default::default()
+                        })
+                        .show_inside(ui, |ui| {
+                            if let Some(selection) = ctx
+                                .rec_cfg
+                                .selection_state
+                                .selection_ui(ctx.re_ui, ui, blueprint)
+                            {
+                                ctx.set_multi_selection(selection.iter().cloned());
+                            }
+                        });
+
+                    egui::ScrollArea::both()
+                        .auto_shrink([true; 2])
+                        .show(ui, |ui| {
+                            egui::Frame {
+                                inner_margin: egui::Margin::same(re_ui::ReUi::view_padding()),
+                                ..Default::default()
+                            }
+                            .show(ui, |ui| {
+                                self.contents(ui, ctx, blueprint);
+                            });
+                        });
+                });
             },
         );
     }

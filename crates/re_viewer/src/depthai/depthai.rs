@@ -283,6 +283,7 @@ pub struct State {
     pub neural_networks: Vec<AiModel>,
 }
 
+// Kind of dangerous, IMPORTANT: Make sure all ChannelId variants are covered
 fn all_subscriptions() -> Vec<ChannelId> {
     vec![
         ChannelId::ColorImage,
@@ -290,6 +291,7 @@ fn all_subscriptions() -> Vec<ChannelId> {
         ChannelId::RightMono,
         ChannelId::DepthImage,
         ChannelId::PointCloud,
+        ChannelId::ImuData,
     ]
 }
 
@@ -393,6 +395,7 @@ impl State {
     }
 
     pub fn set_subscriptions_from_space_views(&mut self, visible_space_views: Vec<&SpaceView>) {
+        // If any bool in the vec is true, the channel is currently visible in the ui somewhere
         let mut visibilities = HashMap::<ChannelId, Vec<bool>>::from([
             (ChannelId::ColorImage, Vec::new()),
             (ChannelId::LeftMono, Vec::new()),
@@ -400,7 +403,7 @@ impl State {
             (ChannelId::DepthImage, Vec::new()),
             (ChannelId::PointCloud, Vec::new()),
         ]);
-
+        // Fill in visibilities
         for space_view in visible_space_views.iter() {
             let mut property_map = space_view.data_blueprint.data_blueprints_projected();
             for entity_path in space_view.data_blueprint.entity_paths().iter() {
@@ -417,6 +420,7 @@ impl State {
             ChannelId::ColorImage,
             ChannelId::LeftMono,
             ChannelId::RightMono,
+            ChannelId::ImuData,
         ]);
         // Now add non default subscriptions
         if self.device_config.config.depth.is_some() {
@@ -428,6 +432,7 @@ impl State {
             }
         }
 
+        // Filter visibilities, include those that are currently visible and also possible (example pointcloud enabled == pointcloud possible)
         let mut subscriptions = visibilities
             .iter()
             .filter_map(|(channel, vis)| {
