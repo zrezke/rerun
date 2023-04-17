@@ -102,49 +102,45 @@ impl framework::Example for Picking {
             PickingLayerProcessor::next_readback_result::<()>(re_ctx, READBACK_IDENTIFIER)
         {
             // Grab the middle pixel. usually we'd want to do something clever that snaps the the closest object of interest.
-            let picked_pixel = picking_result.picking_data[(picking_result.rect.extent.x / 2
-                + (picking_result.rect.extent.y / 2) * picking_result.rect.extent.x)
-                as usize];
+            let picked_id = picking_result.picked_id(picking_result.rect.extent / 2);
+            //let picked_position =
+            //    picking_result.picked_world_position(picking_result.rect.extent / 2);
+            //dbg!(picked_position, picked_id);
 
             self.mesh_is_hovered = false;
-            if picked_pixel == MESH_ID {
+            if picked_id == MESH_ID {
                 self.mesh_is_hovered = true;
-            } else if picked_pixel.object.0 != 0
-                && picked_pixel.object.0 <= self.point_sets.len() as u64
+            } else if picked_id.object.0 != 0 && picked_id.object.0 <= self.point_sets.len() as u64
             {
-                let point_set = &mut self.point_sets[picked_pixel.object.0 as usize - 1];
-                point_set.radii[picked_pixel.instance.0 as usize] = Size::new_scene(0.1);
-                point_set.colors[picked_pixel.instance.0 as usize] = Color32::DEBUG_COLOR;
+                let point_set = &mut self.point_sets[picked_id.object.0 as usize - 1];
+                point_set.radii[picked_id.instance.0 as usize] = Size::new_scene(0.1);
+                point_set.colors[picked_id.instance.0 as usize] = Color32::DEBUG_COLOR;
             }
         }
-
-        let mut view_builder = ViewBuilder::default();
 
         // TODO(#1426): unify camera logic between examples.
         let camera_position = glam::vec3(1.0, 3.5, 7.0);
 
-        view_builder
-            .setup_view(
-                re_ctx,
-                TargetConfiguration {
-                    name: "OutlinesDemo".into(),
-                    resolution_in_pixel: resolution,
-                    view_from_world: macaw::IsoTransform::look_at_rh(
-                        camera_position,
-                        glam::Vec3::ZERO,
-                        glam::Vec3::Y,
-                    )
-                    .unwrap(),
-                    projection_from_view: Projection::Perspective {
-                        vertical_fov: 70.0 * std::f32::consts::TAU / 360.0,
-                        near_plane_distance: 0.01,
-                    },
-                    pixels_from_point,
-                    outline_config: None,
-                    ..Default::default()
+        let mut view_builder = ViewBuilder::new(
+            re_ctx,
+            TargetConfiguration {
+                name: "OutlinesDemo".into(),
+                resolution_in_pixel: resolution,
+                view_from_world: macaw::IsoTransform::look_at_rh(
+                    camera_position,
+                    glam::Vec3::ZERO,
+                    glam::Vec3::Y,
+                )
+                .unwrap(),
+                projection_from_view: Projection::Perspective {
+                    vertical_fov: 70.0 * std::f32::consts::TAU / 360.0,
+                    near_plane_distance: 0.01,
                 },
-            )
-            .unwrap();
+                pixels_from_point,
+                outline_config: None,
+                ..Default::default()
+            },
+        );
 
         // Use an uneven number of pixels for the picking rect so that there is a clearly defined middle-pixel.
         // (for this sample a size of 1 would be sufficient, but for a real application you'd want to use a larger size to allow snapping)
@@ -157,7 +153,7 @@ impl framework::Example for Picking {
             .schedule_picking_rect(re_ctx, picking_rect, READBACK_IDENTIFIER, (), false)
             .unwrap();
 
-        let mut point_builder = PointCloudBuilder::<()>::new(re_ctx);
+        let mut point_builder = PointCloudBuilder::new(re_ctx);
         for (i, point_set) in self.point_sets.iter().enumerate() {
             point_builder
                 .batch(format!("Random Points {i}"))
@@ -165,10 +161,10 @@ impl framework::Example for Picking {
                 .add_points(
                     point_set.positions.len(),
                     point_set.positions.iter().cloned(),
-                )
-                .radii(point_set.radii.iter().cloned())
-                .colors(point_set.colors.iter().cloned())
-                .picking_instance_ids(point_set.picking_ids.iter().cloned());
+                    point_set.radii.iter().cloned(),
+                    point_set.colors.iter().cloned(),
+                    point_set.picking_ids.iter().cloned(),
+                );
         }
         view_builder.queue_draw(&point_builder.to_draw_data(re_ctx).unwrap());
 

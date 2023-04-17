@@ -6,12 +6,12 @@ use itertools::Itertools;
 use poll_promise::Promise;
 use re_arrow_store::{LatestAtQuery, RangeQuery, TimeInt, TimeRange, Timeline};
 use re_data_store::{
-    query_latest_single, ColorMap, ColorMapper, EditableAutoValue, EntityPath, EntityProperties,
+    query_latest_single, Colormap, ColorMapper, EditableAutoValue, EntityPath, EntityProperties,
     ExtraQueryHistory,
 };
 use re_log_types::{
     component_types::{ImuData, InstanceKey, Tensor, TensorDataMeaning},
-    Component, MsgId, TimeType, Transform,
+    Component, TimeType, Transform,
 };
 use re_query::{query_primary_with_history, QueryError};
 
@@ -24,7 +24,7 @@ use crate::{
 
 use egui_dock::{DockArea, NodeIndex, Tree};
 
-use super::{data_ui::DataUi, plot_3d, space_view::ViewState, SpaceView, ViewCategory};
+use super::{data_ui::DataUi, space_view::ViewState, SpaceView, ViewCategory};
 
 use egui::emath::History;
 
@@ -590,19 +590,19 @@ impl SelectionPanel {
 
         let num_selections = ctx.selection().len();
         let selection = ctx.selection().to_vec();
-        for (i, selection) in selection.iter().enumerate() {
+        for (i, item) in selection.iter().enumerate() {
             ui.push_id(i, |ui| {
-                what_is_selected_ui(ui, ctx, blueprint, selection);
+                what_is_selected_ui(ui, ctx, blueprint, item);
 
-                if has_data_section(selection) {
+                if has_data_section(item) {
                     ctx.re_ui.large_collapsing_header(ui, "Data", true, |ui| {
-                        selection.data_ui(ctx, ui, UiVerbosity::All, &query);
+                        item.data_ui(ctx, ui, UiVerbosity::All, &query);
                     });
                 }
 
                 ctx.re_ui
                     .large_collapsing_header(ui, "Blueprint", true, |ui| {
-                        blueprint_ui(ui, ctx, blueprint, selection);
+                        blueprint_ui(ui, ctx, blueprint, item);
                     });
 
                 if i + 1 < num_selections {
@@ -616,7 +616,7 @@ impl SelectionPanel {
 
 fn has_data_section(item: &Item) -> bool {
     match item {
-        Item::MsgId(_) | Item::ComponentPath(_) | Item::InstancePath(_, _) => true,
+        Item::ComponentPath(_) | Item::InstancePath(_, _) => true,
         // Skip data ui since we don't know yet what to show for these.
         Item::SpaceView(_) | Item::DataBlueprintGroup(_, _) => false,
     }
@@ -630,12 +630,6 @@ pub fn what_is_selected_ui(
     item: &Item,
 ) {
     match item {
-        Item::MsgId(msg_id) => {
-            ui.horizontal(|ui| {
-                ui.label("Message ID:");
-                ctx.msg_id_button(ui, *msg_id);
-            });
-        }
         Item::ComponentPath(re_log_types::ComponentPath {
             entity_path,
             component_name,
@@ -727,9 +721,6 @@ impl DataUi for Item {
                 // If you add something in here make sure to adjust SelectionPanel::contents accordingly.
                 debug_assert!(!has_data_section(self));
             }
-            Item::MsgId(msg_id) => {
-                msg_id.data_ui(ctx, ui, verbosity, query);
-            }
             Item::ComponentPath(component_path) => {
                 component_path.data_ui(ctx, ui, verbosity, query);
             }
@@ -748,11 +739,6 @@ fn blueprint_ui(
     item: &Item,
 ) {
     match item {
-        Item::MsgId(_) => {
-            // TODO(andreas): Show space views that contains entities that's part of this message.
-            ui.weak("(nothing)");
-        }
-
         Item::ComponentPath(component_path) => {
             list_existing_data_blueprints(ui, ctx, component_path.entity_path(), blueprint);
         }
@@ -940,12 +926,12 @@ fn colormap_props_ui(ui: &mut egui::Ui, entity_props: &mut EntityProperties) {
                 }
             };
 
-            add_label(ColorMapper::ColorMap(ColorMap::Grayscale));
-            add_label(ColorMapper::ColorMap(ColorMap::Turbo));
-            add_label(ColorMapper::ColorMap(ColorMap::Viridis));
-            add_label(ColorMapper::ColorMap(ColorMap::Plasma));
-            add_label(ColorMapper::ColorMap(ColorMap::Magma));
-            add_label(ColorMapper::ColorMap(ColorMap::Inferno));
+            add_label(ColorMapper::Colormap(Colormap::Grayscale));
+            add_label(ColorMapper::Colormap(Colormap::Turbo));
+            add_label(ColorMapper::Colormap(Colormap::Viridis));
+            add_label(ColorMapper::Colormap(Colormap::Plasma));
+            add_label(ColorMapper::Colormap(Colormap::Magma));
+            add_label(ColorMapper::Colormap(Colormap::Inferno));
         });
 
     ui.end_row();

@@ -1,5 +1,5 @@
 use eframe::epaint::text::TextWrapping;
-use re_data_store::{query_latest_single, EditableAutoValue, EntityPath};
+use re_data_store::{query_latest_single, EditableAutoValue, EntityPath, EntityPropertyMap};
 use re_format::format_f32;
 
 use egui::{NumExt, WidgetText};
@@ -9,17 +9,21 @@ use re_renderer::OutlineConfig;
 
 use crate::{
     misc::{
-        space_info::query_view_coordinates, SelectionHighlight, SpaceViewHighlights, ViewerContext,
+        space_info::query_view_coordinates, HoveredSpace, SelectionHighlight, SpaceViewHighlights,
+        ViewerContext,
     },
     ui::{
-        data_blueprint::DataBlueprintTree, space_view::ScreenshotMode, view_spatial::UiLabelTarget,
+        data_blueprint::DataBlueprintTree,
+        data_ui::{self, DataUi},
+        space_view::ScreenshotMode,
+        view_spatial::UiLabelTarget,
         SpaceViewId,
     },
 };
 
 use super::{
     eye::Eye,
-    scene::{PickingResult, SceneSpatialUiData},
+    scene::{PickingHitType, PickingResult, SceneSpatialUiData},
     ui_2d::View2DState,
     ui_3d::View3DState,
     SceneSpatial, SpaceSpecs,
@@ -59,8 +63,6 @@ impl From<AutoSizeUnit> for WidgetText {
         }
     }
 }
-
-pub const PICKING_RECT_SIZE: u32 = 15;
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub struct ViewSpatialState {
@@ -219,7 +221,6 @@ impl ViewSpatialState {
         if tensor.meaning == TensorDataMeaning::Depth {
             if properties.depth_from_world_scale.is_auto() {
                 let auto = tensor.meter.unwrap_or_else(|| {
-                    use re_log_types::component_types::TensorTrait as _;
                     if tensor.dtype().is_integer() {
                         1000.0
                     } else {
@@ -348,6 +349,7 @@ impl ViewSpatialState {
                         });
                     });
                     ui.checkbox(&mut self.state_3d.show_axes, "Show origin axes").on_hover_text("Show X-Y-Z axes");
+                    ui.checkbox(&mut self.state_3d.show_bbox, "Show bounding box").on_hover_text("Show the current scene bounding box");
                 });
                 ui.end_row();
             }
@@ -355,6 +357,7 @@ impl ViewSpatialState {
             ctx.re_ui.grid_left_hand_label(ui, "Bounding box")
                 .on_hover_text("The bounding box encompassing all Entities in the view right now.");
             ui.vertical(|ui| {
+                ui.style_mut().wrap = Some(false);
                 let BoundingBox { min, max } = self.scene_bbox;
                 ui.label(format!(
                     "x [{} - {}]",
@@ -379,6 +382,7 @@ impl ViewSpatialState {
     }
 
     // TODO(andreas): split into smaller parts, some of it shouldn't be part of the ui path and instead scene loading.
+    #[allow(clippy::too_many_arguments)]
     pub fn view_spatial(
         &mut self,
         ctx: &mut ViewerContext<'_>,
@@ -387,6 +391,7 @@ impl ViewSpatialState {
         scene: SceneSpatial,
         space_view_id: SpaceViewId,
         highlights: &SpaceViewHighlights,
+        entity_properties: &EntityPropertyMap,
     ) {
         self.scene_bbox = scene.primitives.bounding_box();
         if self.scene_bbox_accum.is_nothing() {
@@ -405,7 +410,16 @@ impl ViewSpatialState {
                 let coordinates =
                     query_view_coordinates(&ctx.log_db.entity_db, space, &ctx.current_query());
                 self.state_3d.space_specs = SpaceSpecs::from_view_coordinates(coordinates);
-                super::view_3d(ctx, ui, self, space, space_view_id, scene, highlights);
+                super::view_3d(
+                    ctx,
+                    ui,
+                    self,
+                    space,
+                    space_view_id,
+                    scene,
+                    highlights,
+                    entity_properties,
+                );
             }
             SpatialNavigationMode::TwoD => {
                 self.scene_bbox_accum = self.scene_bbox;
@@ -422,6 +436,7 @@ impl ViewSpatialState {
                     scene_rect_accum,
                     space_view_id,
                     highlights,
+                    entity_properties,
                 );
             }
         }
@@ -535,7 +550,7 @@ pub fn create_labels(
 
     let mut label_shapes = Vec::with_capacity(scene_ui.labels.len() * 2);
 
-    let ui_from_world_3d = eye3d.ui_from_world(ui_from_space2d.to());
+    let ui_from_world_3d = eye3d.ui_from_world(*ui_from_space2d.to());
 
     for label in &scene_ui.labels {
         let (wrap_width, text_anchor_pos) = match label.target {
@@ -662,4 +677,214 @@ pub fn screenshot_context_menu(
     {
         (response, None)
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn picking(
+    ctx: &mut ViewerContext<'_>,
+    mut response: egui::Response,
+    space_from_ui: egui::emath::RectTransform,
+    ui_clip_rect: egui::Rect,
+    parent_ui: &mut egui::Ui,
+    eye: Eye,
+    view_builder: &mut re_renderer::view_builder::ViewBuilder,
+    space_view_id: SpaceViewId,
+    state: &mut ViewSpatialState,
+    scene: &SceneSpatial,
+    space: &EntityPath,
+    entity_properties: &EntityPropertyMap,
+) -> egui::Response {
+    crate::profile_function!();
+
+    let Some(pointer_pos_ui) = response.hover_pos() else {
+        state.previous_picking_result = None;
+        return response;
+    };
+
+    let picking_context = super::scene::PickingContext::new(
+        pointer_pos_ui,
+        space_from_ui,
+        ui_clip_rect,
+        parent_ui.ctx().pixels_per_point(),
+        &eye,
+    );
+
+    let picking_rect_size =
+        super::scene::PickingContext::UI_INTERACTION_RADIUS * parent_ui.ctx().pixels_per_point();
+    // Make the picking rect bigger than necessary so we can use it to counter act delays.
+    // (by the time the picking rectangle read back, the cursor may have moved on).
+    let picking_rect_size = (picking_rect_size * 2.0)
+        .ceil()
+        .at_least(8.0)
+        .at_most(128.0) as u32;
+
+    let _ = view_builder.schedule_picking_rect(
+        ctx.render_ctx,
+        re_renderer::IntRect::from_middle_and_extent(
+            picking_context.pointer_in_pixel.as_ivec2(),
+            glam::uvec2(picking_rect_size, picking_rect_size),
+        ),
+        space_view_id.gpu_readback_id(),
+        (),
+        ctx.app_options.show_picking_debug_overlay,
+    );
+
+    let picking_result = picking_context.pick(
+        ctx.render_ctx,
+        space_view_id.gpu_readback_id(),
+        &state.previous_picking_result,
+        &scene.primitives,
+        &scene.ui,
+    );
+    state.previous_picking_result = Some(picking_result.clone());
+
+    let mut hovered_items = Vec::new();
+
+    // Depth at pointer used for projecting rays from a hovered 2D view to corresponding 3D view(s).
+    // TODO(#1818): Depth at pointer only works for depth images so far.
+    let mut depth_at_pointer = None;
+    for hit in &picking_result.hits {
+        let Some(mut instance_path) = hit.instance_path_hash.resolve(&ctx.log_db.entity_db)
+            else { continue; };
+
+        let ent_properties = entity_properties.get(&instance_path.entity_path);
+        if !ent_properties.interactive {
+            continue;
+        }
+
+        // Special hover ui for images.
+        let picked_image_with_coords = if hit.hit_type == PickingHitType::TexturedRect
+            || *ent_properties.backproject_depth.get()
+        {
+            // We don't support selecting pixels yet.
+            instance_path.instance_key = re_log_types::component_types::InstanceKey::SPLAT;
+            scene
+                .ui
+                .images
+                .iter()
+                .find(|image| image.ent_path == instance_path.entity_path)
+                .and_then(|image| {
+                    image.tensor.image_height_width_channels().map(|[_, w, _]| {
+                        (
+                            image,
+                            hit.instance_path_hash
+                                .instance_key
+                                .to_2d_image_coordinate(w),
+                        )
+                    })
+                })
+        } else {
+            None
+        };
+
+        hovered_items.push(crate::misc::Item::InstancePath(
+            Some(space_view_id),
+            instance_path.clone(),
+        ));
+
+        response = if let Some((image, coords)) = picked_image_with_coords {
+            if let Some(meter) = image.meter {
+                if let Some(raw_value) = image.tensor.get(&[
+                    picking_context.pointer_in_space2d.y.round() as _,
+                    picking_context.pointer_in_space2d.x.round() as _,
+                ]) {
+                    let raw_value = raw_value.as_f64();
+                    let depth_in_meters = raw_value / meter as f64;
+                    depth_at_pointer = Some(depth_in_meters as f32);
+                }
+            }
+
+            response
+                .on_hover_cursor(egui::CursorIcon::Crosshair)
+                .on_hover_ui_at_pointer(|ui| {
+                    ui.set_max_width(320.0);
+
+                    ui.vertical(|ui| {
+                        ui.label(instance_path.to_string());
+                        instance_path.data_ui(
+                            ctx,
+                            ui,
+                            crate::ui::UiVerbosity::Small,
+                            &ctx.current_query(),
+                        );
+
+                        if let [h, w, ..] = image.tensor.shape() {
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                let (w, h) = (w.size as f32, h.size as f32);
+                                if *state.nav_mode.get() == SpatialNavigationMode::TwoD {
+                                    let rect = egui::Rect::from_min_size(
+                                        egui::Pos2::ZERO,
+                                        egui::vec2(w, h),
+                                    );
+                                    data_ui::image::show_zoomed_image_region_area_outline(
+                                        ui,
+                                        &image.tensor,
+                                        [coords[0] as _, coords[1] as _],
+                                        space_from_ui.inverse().transform_rect(rect),
+                                    );
+                                }
+
+                                let tensor_stats = *ctx.cache.tensor_stats(&image.tensor);
+                                let debug_name = image.ent_path.to_string();
+                                data_ui::image::show_zoomed_image_region(
+                                    ctx.render_ctx,
+                                    ui,
+                                    &image.tensor,
+                                    &tensor_stats,
+                                    &image.annotations,
+                                    image.meter,
+                                    &debug_name,
+                                    [coords[0] as _, coords[1] as _],
+                                );
+                            });
+                        }
+                    });
+                })
+        } else {
+            // Hover ui for everything else
+            response.on_hover_ui_at_pointer(|ui| {
+                ctx.instance_path_button(ui, Some(space_view_id), &instance_path);
+                instance_path.data_ui(
+                    ctx,
+                    ui,
+                    crate::ui::UiVerbosity::Reduced,
+                    &ctx.current_query(),
+                );
+            })
+        };
+    }
+
+    ctx.select_hovered_on_click(&response);
+    ctx.set_hovered(hovered_items.into_iter());
+
+    let hovered_space = match state.nav_mode.get() {
+        SpatialNavigationMode::TwoD => HoveredSpace::TwoD {
+            space_2d: space.clone(),
+            pos: picking_context
+                .pointer_in_space2d
+                .extend(depth_at_pointer.unwrap_or(f32::INFINITY)),
+        },
+        SpatialNavigationMode::ThreeD => {
+            let hovered_point = picking_result.space_position();
+            HoveredSpace::ThreeD {
+                space_3d: space.clone(),
+                pos: hovered_point,
+                tracked_space_camera: state.state_3d.tracked_camera.clone(),
+                point_in_space_cameras: scene
+                    .space_cameras
+                    .iter()
+                    .map(|cam| {
+                        (
+                            cam.instance_path_hash,
+                            hovered_point.and_then(|pos| cam.project_onto_2d(pos)),
+                        )
+                    })
+                    .collect(),
+            }
+        }
+    };
+    ctx.selection_state_mut().set_hovered_space(hovered_space);
+
+    response
 }
