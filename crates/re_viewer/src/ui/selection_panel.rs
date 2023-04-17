@@ -41,6 +41,7 @@ enum XYZ {
 enum ImuTabKind {
     Accel,
     Gyro,
+    Mag,
 }
 
 struct ImuXyzTabs<'a> {
@@ -84,6 +85,7 @@ struct DepthaiTabs<'a, 'b> {
     ctx: &'a mut ViewerContext<'b>,
     accel_history: &'a mut History<[f32; 3]>,
     gyro_history: &'a mut History<[f32; 3]>,
+    magnetometer_history: &'a mut History<[f32; 3]>,
     now: f64, // Time elapsed from spawning SelectionPanel
     imu_accel_tabs: &'a mut Tree<XYZ>,
 }
@@ -280,75 +282,55 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                     self.now,
                     [imu_data.gyro.x, imu_data.gyro.y, imu_data.gyro.z],
                 );
+                if let Some(mag) = imu_data.mag {
+                    self.magnetometer_history
+                        .add(self.now, [mag.x, mag.y, mag.z]);
+                }
             });
         }
 
         ui.collapsing("Imu values", |ui| {
-            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                egui::TopBottomPanel::top("accel_panel")
-                    .resizable(true)
-                    .min_height(150.0)
-                    .show_separator_line(true)
-                    .show_inside(ui, |ui| {
-                        let Some(latest) = self.accel_history.latest() else {
-                                ui.label("No accelerometer data yet");
-                                return;
-                            };
-                        ui.vertical(|ui| {
-                            ui.label("Accelerometer");
-                            ui.add_sized([ui.available_width(), 150.0], |ui: &mut egui::Ui| {
-                                // This vertical is just to get a response
-                                ui.vertical(|ui| {
-                                    DockArea::new(&mut self.imu_accel_tabs)
-                                        .id(egui::Id::new("accel_tabs"))
-                                        .style(re_ui::egui_dock_style(ui.style()))
-                                        .show_inside(
-                                            ui,
-                                            &mut ImuXyzTabs {
-                                                data: &mut self.accel_history,
-                                                kind: ImuTabKind::Accel,
-                                            },
-                                        );
-                                })
-                                .response
-                            });
+            let tab_kinds = [ImuTabKind::Accel, ImuTabKind::Gyro, ImuTabKind::Mag];
 
-                            ui.label(format!(
-                                "Accelerometer: ({:.2}, {:.2}, {:.2}) (m/s^2)",
-                                latest[0], latest[1], latest[2]
-                            ));
-                        });
-                    });
-                egui::CentralPanel::default().show_inside(ui, |ui| {
-                    let Some(latest) = self.gyro_history.latest() else {
-                        ui.label("No gyro data yet");
-                        return;
-                    };
-                    ui.vertical(|ui| {
-                        ui.label("Gyroscope");
-                        ui.add_sized([ui.available_width(), 150.0], |ui: &mut egui::Ui| {
-                            ui.vertical(|ui| {
-                                DockArea::new(&mut self.imu_accel_tabs)
-                                    .id(egui::Id::new("gyro_tabs"))
-                                    .style(re_ui::egui_dock_style(ui.style()))
-                                    .show_inside(
-                                        ui,
-                                        &mut ImuXyzTabs {
-                                            data: &mut self.gyro_history,
-                                            kind: ImuTabKind::Gyro,
-                                        },
-                                    );
-                            })
-                            .response
-                        });
-                        ui.label(format!(
-                            "Gyroscope: ({:.2}, {:.2}, {:.2}) (rad/s)",
-                            latest[0], latest[1], latest[2]
-                        ));
-                    });
-                });
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                for kind in tab_kinds.iter() {
+                    self.xyz_plot_ui(ui, *kind);
+                }
             });
         });
+    }
+
+    fn xyz_plot_ui(&mut self, ui: &mut egui::Ui, kind: ImuTabKind) {
+        let (history, display_name, unit) = match kind {
+            ImuTabKind::Accel => (&mut self.accel_history, "Accelerometer", "(m/s^2)"),
+            ImuTabKind::Gyro => (&mut self.gyro_history, "Gyroscope", "(rad/s)"),
+            ImuTabKind::Mag => (&mut self.magnetometer_history, "Magnetometer", "(uT)"),
+        };
+        let Some(latest) = history.latest() else {
+        ui.label(format!("No {display_name} data yet"));
+        return;
+    };
+        ui.label(display_name);
+        ui.add_sized([ui.available_width(), 150.0], |ui: &mut egui::Ui| {
+            ui.vertical(|ui| {
+                DockArea::new(&mut self.imu_accel_tabs)
+                    .id(egui::Id::new(format!("{display_name}_tabs")))
+                    .style(re_ui::egui_dock_style(ui.style()))
+                    .show_inside(
+                        ui,
+                        &mut ImuXyzTabs {
+                            data: *history,
+                            kind: kind,
+                        },
+                    );
+            })
+            .response
+        });
+
+        ui.label(format!(
+            "{display_name}: ({:.2}, {:.2}, {:.2}) {unit}",
+            latest[0], latest[1], latest[2]
+        ));
     }
 }
 
@@ -381,6 +363,7 @@ impl<'a, 'b> egui_dock::TabViewer for DepthaiTabs<'a, 'b> {
                     self.ctx.depthai_state.set_subscriptions(&subs);
                     self.accel_history.clear();
                     self.gyro_history.clear();
+                    self.magnetometer_history.clear();
                 }
                 self.device_configuration_ui(ui);
             }
@@ -420,6 +403,8 @@ pub(crate) struct SelectionPanel {
     #[serde(skip)]
     gyro_history: History<[f32; 3]>,
     #[serde(skip)]
+    magnetometer_history: History<[f32; 3]>,
+    #[serde(skip)]
     start_time: instant::Instant,
 }
 
@@ -430,6 +415,7 @@ impl Default for SelectionPanel {
             imu_accel_tabs: ImuXyzTabs::tree(),
             accel_history: History::new(0..1000, 5.0),
             gyro_history: History::new(0..1000, 5.0),
+            magnetometer_history: History::new(0..1000, 5.0),
             start_time: instant::Instant::now(),
         }
     }
@@ -462,73 +448,68 @@ impl SelectionPanel {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     egui::TopBottomPanel::top("Device configuration")
                         .resizable(true)
-                        .min_height(150.0)
                         .show_separator_line(true)
                         .show_inside(ui, |ui| {
-                            egui::ScrollArea::both()
-                                .auto_shrink([true; 2])
-                                .show(ui, |ui| {
-                                    let mut available_devices = ctx.depthai_state.get_devices();
-                                    let mut currently_selected_device =
-                                        ctx.depthai_state.selected_device.clone();
-                                    let mut combo_device: depthai::DeviceId =
-                                        currently_selected_device.id;
-                                    if combo_device != "" && available_devices.is_empty() {
-                                        available_devices.push(combo_device.clone());
-                                    }
-                                    ui.vertical(|ui| {
-                                        ui.horizontal(|ui| {
-                                            ui.label("Device: ");
-                                            egui::ComboBox::from_id_source("device")
-                                                .width(70.0)
-                                                .selected_text(if combo_device != "" {
-                                                    combo_device.clone().to_string()
-                                                } else {
-                                                    "No device selected".to_string()
-                                                })
-                                                .show_ui(ui, |ui| {
-                                                    if ui
-                                                        .selectable_value(
-                                                            &mut combo_device,
-                                                            "".to_string(),
-                                                            "No device",
-                                                        )
-                                                        .changed()
-                                                    {
-                                                        ctx.depthai_state
-                                                            .set_device(combo_device.clone());
-                                                    }
-                                                    for device in available_devices {
-                                                        if ui
-                                                            .selectable_value(
-                                                                &mut combo_device,
-                                                                device.clone().to_string(),
-                                                                device.to_string(),
-                                                            )
-                                                            .changed()
-                                                        {
-                                                            ctx.depthai_state
-                                                                .set_device(combo_device.clone());
-                                                        }
-                                                    }
-                                                });
-                                        });
-
-                                        if ctx.depthai_state.device_config.update_in_progress {
-                                            ui.add_sized(
-                                                [ui.available_width(), 50.0],
-                                                |ui: &mut egui::Ui| {
-                                                    ui.with_layout(
-                                                        egui::Layout::left_to_right(
-                                                            egui::Align::Center,
-                                                        ),
-                                                        |ui| ui.add(egui::Spinner::new()),
+                            let mut available_devices = ctx.depthai_state.get_devices();
+                            let mut currently_selected_device =
+                                ctx.depthai_state.selected_device.clone();
+                            let mut combo_device: depthai::DeviceId = currently_selected_device.id;
+                            if combo_device != "" && available_devices.is_empty() {
+                                available_devices.push(combo_device.clone());
+                            }
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Device: ");
+                                    egui::ComboBox::from_id_source("device")
+                                        .width(70.0)
+                                        .selected_text(if combo_device != "" {
+                                            combo_device.clone().to_string()
+                                        } else {
+                                            "No device selected".to_string()
+                                        })
+                                        .show_ui(ui, |ui| {
+                                            if ui
+                                                .selectable_value(
+                                                    &mut combo_device,
+                                                    "".to_string(),
+                                                    "No device",
+                                                )
+                                                .changed()
+                                            {
+                                                ctx.depthai_state.set_device(combo_device.clone());
+                                            }
+                                            for device in available_devices {
+                                                if ui
+                                                    .selectable_value(
+                                                        &mut combo_device,
+                                                        device.clone().to_string(),
+                                                        device.to_string(),
                                                     )
-                                                    .response
-                                                },
-                                            );
-                                            return;
-                                        }
+                                                    .changed()
+                                                {
+                                                    ctx.depthai_state
+                                                        .set_device(combo_device.clone());
+                                                }
+                                            }
+                                        });
+                                });
+
+                                if ctx.depthai_state.device_config.update_in_progress {
+                                    ui.add_sized(
+                                        [ui.available_width(), 50.0],
+                                        |ui: &mut egui::Ui| {
+                                            ui.with_layout(
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                |ui| ui.add(egui::Spinner::new()),
+                                            )
+                                            .response
+                                        },
+                                    );
+                                    return;
+                                }
+                                egui::ScrollArea::both()
+                                    .auto_shrink([false; 2])
+                                    .show(ui, |ui| {
                                         DockArea::new(&mut self.depthai_tabs)
                                             .id(egui::Id::new("depthai_tabs"))
                                             .style(re_ui::egui_dock_style(ui.style()))
@@ -538,6 +519,8 @@ impl SelectionPanel {
                                                     ctx,
                                                     accel_history: &mut self.accel_history,
                                                     gyro_history: &mut self.gyro_history,
+                                                    magnetometer_history: &mut self
+                                                        .magnetometer_history,
                                                     now: self.start_time.elapsed().as_nanos()
                                                         as f64
                                                         / 1e9,
@@ -545,7 +528,7 @@ impl SelectionPanel {
                                                 },
                                             );
                                     });
-                                })
+                            });
                         });
 
                     egui::CentralPanel::default().show_inside(ui, |ui| {
