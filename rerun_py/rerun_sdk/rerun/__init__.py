@@ -23,6 +23,7 @@ from rerun.log.text import LoggingHandler, LogLevel, log_text_entry
 from rerun.log.transform import log_rigid3, log_unknown_transform, log_view_coordinates
 from rerun.script_helpers import script_add_args, script_setup, script_teardown
 from rerun.log.pipeline_graph import log_pipeline_graph
+from rerun.log.imu import log_imu
 
 
 __all__ = [
@@ -65,6 +66,7 @@ __all__ = [
     "script_add_args",
     "script_setup",
     "script_teardown",
+    "log_imu",
 ]
 
 
@@ -145,7 +147,7 @@ def init(application_id: str, spawn: bool = False, default_enabled: bool = True,
         and another doing camera calibration, you could have
         `rerun.init("object_detector")` and `rerun.init("calibrator")`.
     spawn : bool
-        Spawn a Rerun Viewer and stream logging data to it.
+        Spawn a Depthai Viewer and stream logging data to it.
         Short for calling `spawn` separately.
         If you don't call this, log events will be buffered indefinitely until
         you call either `connect`, `show`, or `save`
@@ -265,9 +267,9 @@ def set_strict_mode(strict_mode: bool) -> None:
 
 def connect(addr: Optional[str] = None) -> None:
     """
-    Connect to a remote Rerun Viewer on the given ip:port.
+    Connect to a remote Depthai Viewer on the given ip:port.
 
-    Requires that you first start a Rerun Viewer, e.g. with 'python -m rerun'
+    Requires that you first start a Depthai Viewer, e.g. with 'python -m rerun'
 
     This function returns immediately.
 
@@ -290,7 +292,7 @@ _connect = connect  # we need this because Python scoping is horrible
 
 def spawn(port: int = 9876, connect: bool = True) -> None:
     """
-    Spawn a Rerun Viewer, listening on the given port.
+    Spawn a Depthai Viewer, listening on the given port.
 
     This is often the easiest and best way to use Rerun.
     Just call this once at the start of your program.
@@ -321,8 +323,7 @@ def spawn(port: int = 9876, connect: bool = True) -> None:
 
     # start_new_session=True ensures the spawned process does NOT die when
     # we hit ctrl-c in the terminal running the parent Python process.
-    subprocess.Popen([python_executable, "-m", "rerun",
-                     "--port", str(port)], start_new_session=True)
+    subprocess.Popen([python_executable, "-m", "rerun", "--port", str(port)], start_new_session=True)
 
     # TODO(emilk): figure out a way to postpone connecting until the rerun viewer is listening.
     # For example, wait until it prints "Hosting a SDK server over TCP at …"

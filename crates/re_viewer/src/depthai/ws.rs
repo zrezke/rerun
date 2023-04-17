@@ -14,18 +14,21 @@ async fn spawn_ws_client(
     recv_tx: crossbeam_channel::Sender<WsMessage>,
     send_rx: crossbeam_channel::Receiver<WsMessage>,
     shutdown: Arc<AtomicBool>,
+    connected: Arc<AtomicBool>,
 ) {
     let (error_tx, error_rx) = crossbeam_channel::unbounded();
     // Retry connection until successful
     loop {
         let recv_tx = recv_tx.clone();
         let error_tx = error_tx.clone();
+        let connected = connected.clone();
         if let Ok(sender) = ewebsock::ws_connect(
             String::from("ws://localhost:9001"),
             Box::new(move |event| {
                 match event {
                     WsEvent::Opened => {
                         re_log::info!("Websocket opened");
+                        connected.store(true, std::sync::atomic::Ordering::SeqCst);
                         ControlFlow::Continue(())
                     }
                     WsEvent::Message(message) => {
@@ -35,6 +38,7 @@ async fn spawn_ws_client(
                     }
                     WsEvent::Error(e) => {
                         // re_log::info!("Websocket Error: {:?}", e);
+                        connected.store(false, std::sync::atomic::Ordering::SeqCst);
                         error_tx.send(e);
                         ControlFlow::Break(())
                     }
@@ -54,6 +58,7 @@ async fn spawn_ws_client(
                     exit(0);
                 }
                 if let Ok(message) = send_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                    re_log::debug!("Sending message: {:?}", message);
                     sender.send(message);
                 }
             }
@@ -77,7 +82,7 @@ pub enum WsMessageData {
     Devices(Vec<depthai::DeviceId>),
     Device(depthai::Device),
     Pipeline(depthai::DeviceConfig),
-    Error(String),
+    Error(depthai::Error),
 }
 
 #[derive(Deserialize, Serialize, fmt::Debug)]
@@ -95,11 +100,11 @@ impl Default for WsMessageType {
     }
 }
 
+// TODO(filip): Perhaps add a "message" field to all messages to display toasts
 #[derive(Serialize, fmt::Debug)]
 pub struct BackWsMessage {
     #[serde(rename = "type")]
     pub kind: WsMessageType,
-    // #[serde(deserialize_with = "deserialize_ws_message_data")]
     pub data: WsMessageData,
 }
 
@@ -145,7 +150,7 @@ impl Default for BackWsMessage {
     fn default() -> Self {
         Self {
             kind: WsMessageType::Error.into(),
-            data: WsMessageData::Error(String::from("Invalid message")),
+            data: WsMessageData::Error(depthai::Error::default()),
         }
     }
 }
@@ -155,6 +160,7 @@ pub struct WebSocket {
     sender: crossbeam_channel::Sender<WsMessage>,
     shutdown: Arc<AtomicBool>,
     task: tokio::task::JoinHandle<()>,
+    pub connected: Arc<AtomicBool>,
 }
 
 impl Default for WebSocket {
@@ -165,16 +171,42 @@ impl Default for WebSocket {
 
 impl WebSocket {
     pub fn new() -> Self {
+        re_log::debug!("Creating websocket client");
         let (recv_tx, recv_rx) = crossbeam_channel::unbounded();
         let (send_tx, send_rx) = crossbeam_channel::unbounded();
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown.clone();
-        let task = tokio::spawn(spawn_ws_client(recv_tx, send_rx, shutdown_clone));
+        let connected = Arc::new(AtomicBool::new(false));
+        let connected_clone = connected.clone();
+        let mut task = None;
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            re_log::debug!("Using current tokio runtime");
+            task = Some(handle.spawn(spawn_ws_client(
+                recv_tx,
+                send_rx,
+                shutdown_clone,
+                connected_clone,
+            )));
+        } else {
+            re_log::debug!("Creating new tokio runtime");
+            task = Some(
+                tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .unwrap()
+                    .spawn(spawn_ws_client(
+                        recv_tx,
+                        send_rx,
+                        shutdown_clone,
+                        connected_clone,
+                    )),
+            );
+        }
         Self {
             receiver: recv_rx,
             sender: send_tx,
             shutdown,
-            task,
+            task: task.unwrap(),
+            connected,
         }
     }
 
@@ -205,5 +237,9 @@ impl WebSocket {
     }
     pub fn send(&self, message: String) {
         self.sender.send(WsMessage::Text(message));
+        // TODO(filip): This is a hotfix for the websocket not sending the message
+        // This doesn't actually send any message, but it makes the websocket actually send the message previous msg
+        // It has to be something related to tokio::spawn, because it works fine when just running in the current thread
+        self.sender.send(WsMessage::Text("".to_string()));
     }
 }

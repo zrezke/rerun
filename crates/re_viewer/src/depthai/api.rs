@@ -19,35 +19,18 @@ impl Default for ApiError {
 
 #[derive(Default)]
 pub struct BackendCommChannel {
-    ws: WebSocket,
+    pub ws: WebSocket,
 }
 
 impl BackendCommChannel {
     pub fn shutdown(&mut self) {
         self.ws.shutdown();
     }
-    pub fn set_subscriptions(&mut self, subscriptions: &depthai::Subscriptions) {
-        let mut subs = Vec::new();
-
-        if subscriptions.color_image {
-            subs.push(depthai::ChannelId::ColorImage);
-        }
-        if subscriptions.left_image {
-            subs.push(depthai::ChannelId::LeftMono);
-        }
-        if subscriptions.right_image {
-            subs.push(depthai::ChannelId::RightMono);
-        }
-        if subscriptions.depth_image {
-            subs.push(depthai::ChannelId::DepthImage);
-        }
-        if subscriptions.point_cloud {
-            subs.push(depthai::ChannelId::PointCloud);
-        }
+    pub fn set_subscriptions(&mut self, subscriptions: &Vec<depthai::ChannelId>) {
         self.ws.send(
             serde_json::to_string(&WsMessage {
                 kind: WsMessageType::Subscriptions,
-                data: WsMessageData::Subscriptions(subs),
+                data: WsMessageData::Subscriptions(subscriptions.clone()),
             })
             .unwrap(),
         );
@@ -57,7 +40,7 @@ impl BackendCommChannel {
         self.ws.send(
             serde_json::to_string(&WsMessage {
                 kind: WsMessageType::Pipeline,
-                data: WsMessageData::Pipeline(*config),
+                data: WsMessageData::Pipeline(config.clone()),
             })
             .unwrap(),
         );

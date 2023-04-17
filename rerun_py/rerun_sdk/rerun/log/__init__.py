@@ -24,6 +24,7 @@ __all__ = [
     "text_internal",
     "transform",
     "ext",
+    "imu"
 ]
 
 

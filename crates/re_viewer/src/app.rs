@@ -938,6 +938,7 @@ struct AppState {
     /// Configuration for the current recording (found in [`LogDb`]).
     recording_configs: IntMap<RecordingId, RecordingConfig>,
 
+    #[serde(skip)] // Quick fix for subscriptions setting, just don't remembet space views
     blueprints: HashMap<ApplicationId, crate::ui::Blueprint>,
 
     /// Which view panel is currently being shown
@@ -948,12 +949,12 @@ struct AppState {
     selection_panel: crate::selection_panel::SelectionPanel,
     time_panel: crate::time_panel::TimePanel,
 
+    selected_device: depthai::DeviceId,
+    depthai_state: depthai::State,
+
     #[cfg(not(target_arch = "wasm32"))]
     #[serde(skip)]
     profiler: crate::Profiler,
-
-    selected_device: depthai::DeviceId,
-    depthai_state: depthai::State,
 }
 
 impl AppState {
@@ -979,10 +980,10 @@ impl AppState {
             blueprints,
             selection_panel,
             time_panel,
-            #[cfg(not(target_arch = "wasm32"))]
-                profiler: _,
             selected_device,
             depthai_state,
+            #[cfg(not(target_arch = "wasm32"))]
+                profiler: _,
         } = self;
 
         let rec_cfg =
@@ -1350,7 +1351,7 @@ fn frame_time_label_ui(ui: &mut egui::Ui, app: &mut App) {
         // we use monospace so the width doesn't fluctuate as the numbers change.
         let text = format!("{ms:.1} ms");
         ui.label(egui::RichText::new(text).monospace().color(color))
-            .on_hover_text("CPU time used by Rerun Viewer each frame. Lower is better.");
+            .on_hover_text("CPU time used by Depthai Viewer each frame. Lower is better.");
     }
 }
 
@@ -1365,7 +1366,7 @@ fn memory_use_label_ui(ui: &mut egui::Ui, gpu_resource_stats: &WgpuResourcePoolS
                 .color(ui.visuals().weak_text_color()),
         )
         .on_hover_text(format!(
-            "Rerun Viewer is using {} of RAM in {} separate allocations,\n\
+            "Depthai Viewer is using {} of RAM in {} separate allocations,\n\
             plus {} of GPU memory in {} textures and {} buffers.",
             bytes_used_text,
             format_number(count.count),
@@ -1400,7 +1401,7 @@ fn input_latency_label_ui(ui: &mut egui::Ui, app: &mut App) {
                 format_number(queue_len),
             );
             let hover_text =
-                    "When more data is arriving over network than the Rerun Viewer can index, a queue starts building up, leading to latency and increased RAM use.\n\
+                    "When more data is arriving over network than the Depthai Viewer can index, a queue starts building up, leading to latency and increased RAM use.\n\
                     This latency does NOT include network latency.";
 
             if latency_sec < app.state.app_options.warn_latency {

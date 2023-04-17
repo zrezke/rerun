@@ -114,6 +114,23 @@ impl Viewport {
                     .copied()
                     .collect_vec();
 
+                let visible_space_views = &self.visible;
+                let all_entities = visible_space_views.iter().map(|space_view_id| {
+                    self.space_views
+                        .get(space_view_id)
+                        .unwrap()
+                        .data_blueprint
+                        .entity_paths()
+                });
+                if !self.visible.is_empty() {
+                    ctx.depthai_state.set_subscriptions_from_space_views(
+                        self.space_views
+                            .values()
+                            .filter(|space_view| self.visible.contains(&space_view.id))
+                            .collect_vec(),
+                    );
+                }
+
                 for space_view_id in &space_view_ids {
                     self.space_view_entry_ui(ctx, ui, space_view_id);
                 }
@@ -133,6 +150,10 @@ impl Viewport {
             re_log::warn_once!("Bug: asked to show a ui for a Space View that doesn't exist");
             return;
         };
+        if space_view.data_blueprint.entity_paths().is_empty() {
+            self.remove(space_view_id);
+            return;
+        }
         debug_assert_eq!(space_view.id, *space_view_id);
 
         let mut visibility_changed = false;
@@ -214,6 +235,12 @@ impl Viewport {
         let entities = group.entities.clone();
         let group_name = group.display_name.clone();
         let group_is_visible = group.properties_projected.visible && space_view_visible;
+        ctx.depthai_state
+            .entities_to_remove(&entities)
+            .iter()
+            .for_each(|ep| {
+                space_view.data_blueprint.remove_entity(ep);
+            });
 
         for entity_path in &entities {
             ui.horizontal(|ui| {
@@ -257,6 +284,14 @@ impl Viewport {
                 );
             });
         }
+
+        ctx.depthai_state
+            .entities_to_remove(&entities)
+            .iter()
+            .for_each(|ep| {
+                space_view.data_blueprint.remove_entity(ep);
+                space_view.entities_determined_by_user = true;
+            });
 
         for child_group_handle in &children {
             let Some(child_group) = space_view.data_blueprint.group_mut(*child_group_handle) else {
@@ -359,6 +394,7 @@ impl Viewport {
         spaces_info: &SpaceInfoCollection,
     ) {
         crate::profile_function!();
+        // TODO(filip): Add back entities that were removed from the space view if they are available again
 
         for space_view in self.space_views.values_mut() {
             space_view.on_frame_start(ctx, spaces_info);
@@ -455,6 +491,7 @@ impl Viewport {
             ui.spacing_mut().item_spacing.x = re_ui::ReUi::view_padding();
 
             egui_dock::DockArea::new(tree)
+                .id(egui::Id::new("space_view_dock"))
                 .style(re_ui::egui_dock_style(ui.style()))
                 .show_inside(ui, &mut tab_viewer);
         });
