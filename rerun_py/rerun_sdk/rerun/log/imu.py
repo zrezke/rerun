@@ -7,7 +7,7 @@ import numpy as np
 
 
 @log_decorator
-def log_imu(accel: npt.ArrayLike, gyro: npt.ArrayLike, timeless: bool = False) -> None:
+def log_imu(accel: npt.ArrayLike, gyro: npt.ArrayLike, orientation: npt.ArrayLike) -> None:
     """
     Log an IMU sensor reading.
 
@@ -29,6 +29,10 @@ def log_imu(accel: npt.ArrayLike, gyro: npt.ArrayLike, timeless: bool = False) -
         gyro = np.require(gyro, dtype=np.float32)
     else:
         raise ValueError("angular velocity vector cannot be None")
+    if orientation is not None:
+        orientation = np.require(orientation, dtype=np.float32)
+    else:
+        raise ValueError("orientation vector cannot be None")
 
     instanced: Dict[str, Any] = {}
     if accel.size != 3:
@@ -36,6 +40,9 @@ def log_imu(accel: npt.ArrayLike, gyro: npt.ArrayLike, timeless: bool = False) -
     if gyro.size != 3:
         raise ValueError(f"Angular velocity vector must have a length of 3, got: {gyro.size}")
 
-    instanced["rerun.imu"] = Imu.create(accel, gyro)
+    if orientation.size != 4:
+        raise ValueError(f"Orientation quaternion must have a length of 4, got: {orientation.size}")
+
+    instanced["rerun.imu"] = Imu.create(accel, gyro, orientation)
     # Fixed imu entity path
-    bindings.log_arrow_msg("imu_data", components=instanced, timeless=timeless)
+    bindings.log_arrow_msg("imu_data", components=instanced, timeless=False)

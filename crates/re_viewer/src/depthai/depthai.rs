@@ -236,14 +236,14 @@ impl Default for Error {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, fmt::Debug)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, PartialEq, fmt::Debug)]
 pub struct Device {
     pub id: DeviceId,
     // Add more fields later
 }
 impl Default for Device {
     fn default() -> Self {
-        Self { id: -1 }
+        Self { id: "".to_string() }
     }
 }
 
@@ -522,7 +522,7 @@ impl State {
                     match error.action {
                         ErrorAction::None => (),
                         ErrorAction::FullReset => {
-                            self.set_device(-1);
+                            self.set_device("".into());
                         }
                     }
                 }
@@ -534,7 +534,7 @@ impl State {
             if poll_instant.elapsed().as_secs() < 2 {
                 return;
             }
-            if self.selected_device.id == -1 {
+            if self.selected_device.id == "" {
                 self.backend_comms.get_devices();
             }
             self.poll_instant = Some(Instant::now());
@@ -557,7 +557,7 @@ impl State {
             .ws
             .connected
             .load(std::sync::atomic::Ordering::SeqCst)
-            || self.selected_device.id == -1
+            || self.selected_device.id == ""
         {
             return;
         }
@@ -570,4 +570,4 @@ impl State {
     }
 }
 
-pub type DeviceId = i64; // i64 because of serialization
+pub type DeviceId = String; // i64 because of serialization
