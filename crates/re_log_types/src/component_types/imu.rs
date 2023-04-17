@@ -7,6 +7,7 @@ use super::{Point3D, Quaternion};
 pub struct ImuData {
     pub accel: Point3D,
     pub gyro: Point3D,
+    pub mag: Option<Point3D>,
     pub orientation: Quaternion,
 }
 

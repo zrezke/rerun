@@ -7,7 +7,9 @@ import numpy as np
 
 
 @log_decorator
-def log_imu(accel: npt.ArrayLike, gyro: npt.ArrayLike, orientation: npt.ArrayLike) -> None:
+def log_imu(
+    accel: npt.ArrayLike, gyro: npt.ArrayLike, orientation: npt.ArrayLike, mag: npt.ArrayLike | None = None
+) -> None:
     """
     Log an IMU sensor reading.
 
@@ -43,6 +45,6 @@ def log_imu(accel: npt.ArrayLike, gyro: npt.ArrayLike, orientation: npt.ArrayLik
     if orientation.size != 4:
         raise ValueError(f"Orientation quaternion must have a length of 4, got: {orientation.size}")
 
-    instanced["rerun.imu"] = Imu.create(accel, gyro, orientation)
+    instanced["rerun.imu"] = Imu.create(accel, gyro, orientation, mag)
     # Fixed imu entity path
     bindings.log_arrow_msg("imu_data", components=instanced, timeless=False)
