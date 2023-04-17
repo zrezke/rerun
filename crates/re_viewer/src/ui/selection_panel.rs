@@ -68,6 +68,9 @@ impl<'a> egui_dock::TabViewer for ImuXyzTabs<'a> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         ui.add_sized([ui.available_width(), 150.0], |ui: &mut egui::Ui| {
             Plot::new(format!("{:?} ({tab:?})", self.kind))
+                .allow_drag(false)
+                .allow_zoom(false)
+                .allow_scroll(false)
                 .show(ui, |plot_ui| {
                     plot_ui.line(Line::new(PlotPoints::new(
                         self.data
@@ -293,9 +296,11 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
             let tab_kinds = [ImuTabKind::Accel, ImuTabKind::Gyro, ImuTabKind::Mag];
 
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                for kind in tab_kinds.iter() {
-                    self.xyz_plot_ui(ui, *kind);
-                }
+                egui::ScrollArea::both().show(ui, |ui| {
+                    for kind in tab_kinds.iter() {
+                        self.xyz_plot_ui(ui, *kind);
+                    }
+                });
             });
         });
     }
