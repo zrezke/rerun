@@ -491,6 +491,7 @@ impl Viewport {
             ui.spacing_mut().item_spacing.x = re_ui::ReUi::view_padding();
 
             egui_dock::DockArea::new(tree)
+                .id(egui::Id::new("space_view_dock"))
                 .style(re_ui::egui_dock_style(ui.style()))
                 .show_inside(ui, &mut tab_viewer);
         });

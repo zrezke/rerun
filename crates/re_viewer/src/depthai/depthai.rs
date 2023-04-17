@@ -236,14 +236,14 @@ impl Default for Error {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, fmt::Debug)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, PartialEq, fmt::Debug)]
 pub struct Device {
     pub id: DeviceId,
     // Add more fields later
 }
 impl Default for Device {
     fn default() -> Self {
-        Self { id: -1 }
+        Self { id: "".to_string() }
     }
 }
 
@@ -283,6 +283,7 @@ pub struct State {
     pub neural_networks: Vec<AiModel>,
 }
 
+// Kind of dangerous, IMPORTANT: Make sure all ChannelId variants are covered
 fn all_subscriptions() -> Vec<ChannelId> {
     vec![
         ChannelId::ColorImage,
@@ -290,6 +291,7 @@ fn all_subscriptions() -> Vec<ChannelId> {
         ChannelId::RightMono,
         ChannelId::DepthImage,
         ChannelId::PointCloud,
+        ChannelId::ImuData,
     ]
 }
 
@@ -339,6 +341,7 @@ pub enum ChannelId {
     DepthImage,
     PointCloud,
     PinholeCamera,
+    ImuData,
 }
 
 use lazy_static::lazy_static;
@@ -392,6 +395,7 @@ impl State {
     }
 
     pub fn set_subscriptions_from_space_views(&mut self, visible_space_views: Vec<&SpaceView>) {
+        // If any bool in the vec is true, the channel is currently visible in the ui somewhere
         let mut visibilities = HashMap::<ChannelId, Vec<bool>>::from([
             (ChannelId::ColorImage, Vec::new()),
             (ChannelId::LeftMono, Vec::new()),
@@ -399,7 +403,7 @@ impl State {
             (ChannelId::DepthImage, Vec::new()),
             (ChannelId::PointCloud, Vec::new()),
         ]);
-
+        // Fill in visibilities
         for space_view in visible_space_views.iter() {
             let mut property_map = space_view.data_blueprint.data_blueprints_projected();
             for entity_path in space_view.data_blueprint.entity_paths().iter() {
@@ -411,13 +415,14 @@ impl State {
             }
         }
 
+        // First add subscriptions that are always possible in terms of ui (no enable/disable buttons for these)
         let mut possible_subscriptions = Vec::<ChannelId>::from([
             ChannelId::ColorImage,
             ChannelId::LeftMono,
             ChannelId::RightMono,
+            ChannelId::ImuData,
         ]);
-
-        // Non default subscriptions
+        // Now add non default subscriptions
         if self.device_config.config.depth.is_some() {
             possible_subscriptions.push(ChannelId::DepthImage);
             if let Some(depth) = self.device_config.config.depth {
@@ -427,6 +432,7 @@ impl State {
             }
         }
 
+        // Filter visibilities, include those that are currently visible and also possible (example pointcloud enabled == pointcloud possible)
         let mut subscriptions = visibilities
             .iter()
             .filter_map(|(channel, vis)| {
@@ -516,7 +522,7 @@ impl State {
                     match error.action {
                         ErrorAction::None => (),
                         ErrorAction::FullReset => {
-                            self.set_device(-1);
+                            self.set_device("".into());
                         }
                     }
                 }
@@ -528,7 +534,7 @@ impl State {
             if poll_instant.elapsed().as_secs() < 2 {
                 return;
             }
-            if self.selected_device.id == -1 {
+            if self.selected_device.id == "" {
                 self.backend_comms.get_devices();
             }
             self.poll_instant = Some(Instant::now());
@@ -551,7 +557,7 @@ impl State {
             .ws
             .connected
             .load(std::sync::atomic::Ordering::SeqCst)
-            || self.selected_device.id == -1
+            || self.selected_device.id == ""
         {
             return;
         }
@@ -564,4 +570,4 @@ impl State {
     }
 }
 
-pub type DeviceId = i64; // i64 because of serialization
+pub type DeviceId = String; // i64 because of serialization

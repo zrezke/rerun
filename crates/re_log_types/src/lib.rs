@@ -44,7 +44,7 @@ pub use self::component_types::AnnotationContext;
 pub use self::component_types::Arrow3D;
 pub use self::component_types::MsgId;
 pub use self::component_types::ViewCoordinates;
-pub use self::component_types::{EncodedMesh3D, Mesh3D, MeshFormat, MeshId, RawMesh3D};
+pub use self::component_types::{EncodedMesh3D, ImuData, Mesh3D, MeshFormat, MeshId, RawMesh3D};
 pub use self::data::*;
 pub use self::data_cell::{DataCell, DataCellError, DataCellResult};
 pub use self::data_row::{DataRow, DataRowError, DataRowResult};
