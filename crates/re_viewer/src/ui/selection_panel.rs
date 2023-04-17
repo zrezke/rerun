@@ -296,16 +296,23 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                             };
                         ui.vertical(|ui| {
                             ui.label("Accelerometer");
-                            DockArea::new(&mut self.imu_accel_tabs)
-                                .id(egui::Id::new("accel_tabs"))
-                                .style(re_ui::egui_dock_style(ui.style()))
-                                .show_inside(
-                                    ui,
-                                    &mut ImuXyzTabs {
-                                        data: &mut self.accel_history,
-                                        kind: ImuTabKind::Accel,
-                                    },
-                                );
+                            ui.add_sized([ui.available_width(), 150.0], |ui: &mut egui::Ui| {
+                                // This vertical is just to get a response
+                                ui.vertical(|ui| {
+                                    DockArea::new(&mut self.imu_accel_tabs)
+                                        .id(egui::Id::new("accel_tabs"))
+                                        .style(re_ui::egui_dock_style(ui.style()))
+                                        .show_inside(
+                                            ui,
+                                            &mut ImuXyzTabs {
+                                                data: &mut self.accel_history,
+                                                kind: ImuTabKind::Accel,
+                                            },
+                                        );
+                                })
+                                .response
+                            });
+
                             ui.label(format!(
                                 "Accelerometer: ({:.2}, {:.2}, {:.2}) (m/s^2)",
                                 latest[0], latest[1], latest[2]
@@ -319,16 +326,21 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                     };
                     ui.vertical(|ui| {
                         ui.label("Gyroscope");
-                        DockArea::new(&mut self.imu_accel_tabs)
-                            .id(egui::Id::new("gyro_tabs"))
-                            .style(re_ui::egui_dock_style(ui.style()))
-                            .show_inside(
-                                ui,
-                                &mut ImuXyzTabs {
-                                    data: &mut self.gyro_history,
-                                    kind: ImuTabKind::Gyro,
-                                },
-                            );
+                        ui.add_sized([ui.available_width(), 150.0], |ui: &mut egui::Ui| {
+                            ui.vertical(|ui| {
+                                DockArea::new(&mut self.imu_accel_tabs)
+                                    .id(egui::Id::new("gyro_tabs"))
+                                    .style(re_ui::egui_dock_style(ui.style()))
+                                    .show_inside(
+                                        ui,
+                                        &mut ImuXyzTabs {
+                                            data: &mut self.gyro_history,
+                                            kind: ImuTabKind::Gyro,
+                                        },
+                                    );
+                            })
+                            .response
+                        });
                         ui.label(format!(
                             "Gyroscope: ({:.2}, {:.2}, {:.2}) (rad/s)",
                             latest[0], latest[1], latest[2]
