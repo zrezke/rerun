@@ -5,6 +5,10 @@ use re_smart_channel::Receiver;
 
 use anyhow::Context as _;
 use clap::Subcommand;
+#[cfg(feature = "web_viewer")]
+use re_web_viewer_server::WebViewerServerPort;
+#[cfg(feature = "web_viewer")]
+use re_ws_comms::RerunServerPort;
 
 #[cfg(feature = "web_viewer")]
 use crate::web_viewer::host_web_viewer;
@@ -36,41 +40,9 @@ use crate::web_viewer::host_web_viewer;
 #[derive(Debug, clap::Parser)]
 #[clap(author, about)]
 struct Args {
-    /// Print version and quit
-    #[clap(long)]
-    version: bool,
-
-    /// Either a path to a `.rrd` file to load, an http url to an `.rrd` file,
-    /// or a websocket url to a Rerun Server from which to read data
-    ///
-    /// If none is given, a server will be hosted which the Rerun SDK can connect to.
-    url_or_path: Option<String>,
-
-    /// What TCP port do we listen to (for SDK:s to connect to)?
-    #[cfg(feature = "server")]
-    #[clap(long, default_value_t = re_sdk_comms::DEFAULT_SERVER_PORT)]
-    port: u16,
-
-    /// Start the viewer in the browser (instead of locally).
-    /// Requires Rerun to have been compiled with the 'web_viewer' feature.
-    #[clap(long)]
-    web_viewer: bool,
-
-    /// Stream incoming log events to an .rrd file at the given path.
-    #[clap(long)]
-    save: Option<String>,
-
-    /// Start with the puffin profiler running.
-    #[clap(long)]
-    profile: bool,
-
-    /// An upper limit on how much memory the Depthai Viewer should use.
-    ///
-    /// When this limit is used, Rerun will purge the oldest data.
-    ///
-    /// Example: `16GB`
-    #[clap(long)]
-    memory_limit: Option<String>,
+    // Note: arguments are sorted lexicographically for nicer `--help` message:
+    #[command(subcommand)]
+    commands: Option<Commands>,
 
     /// Set a maximum input latency, e.g. "200ms" or "10s".
     ///
@@ -82,8 +54,74 @@ struct Args {
     #[clap(long)]
     drop_at_latency: Option<String>,
 
-    #[command(subcommand)]
-    commands: Option<Commands>,
+    /// An upper limit on how much memory the Rerun Viewer should use.
+    ///
+    /// When this limit is used, Rerun will purge the oldest data.
+    ///
+    /// Example: `16GB`
+    #[clap(long)]
+    memory_limit: Option<String>,
+
+    /// Whether the Rerun Viewer should persist the state of the viewer to disk.
+    ///
+    /// When persisted, the state will be stored at the following locations:
+    /// - Linux: /home/UserName/.local/share/rerunviewer
+    /// - macOS: /Users/UserName/Library/Application Support/rerunviewer
+    /// - Windows: C:\Users\UserName\AppData\Roaming\rerunviewer
+    #[clap(long, default_value_t = true)]
+    persist_state: bool,
+
+    /// What TCP port do we listen to (for SDKs to connect to)?
+    #[cfg(feature = "server")]
+    #[clap(long, default_value_t = re_sdk_comms::DEFAULT_SERVER_PORT)]
+    port: u16,
+
+    /// Start with the puffin profiler running.
+    #[clap(long)]
+    profile: bool,
+
+    /// Stream incoming log events to an .rrd file at the given path.
+    #[clap(long)]
+    save: Option<String>,
+
+    /// Exit with a non-zero exit code if any warning or error is logged. Useful for tests.
+    #[clap(long)]
+    strict: bool,
+
+    /// Ingest data and then quit once the goodbye message has been received.
+    ///
+    /// Used for testing together with the `--strict` argument.
+    ///
+    /// Fails if no messages are received, or if no messages are received within a dozen or so seconds.
+    #[clap(long)]
+    test_receive: bool,
+
+    /// Either a path to a `.rrd` file to load, an http url to an `.rrd` file,
+    /// or a websocket url to a Rerun Server from which to read data
+    ///
+    /// If none is given, a server will be hosted which the Rerun SDK can connect to.
+    url_or_path: Option<String>,
+
+    /// Print version and quit
+    #[clap(long)]
+    version: bool,
+
+    /// Start the viewer in the browser (instead of locally).
+    /// Requires Rerun to have been compiled with the 'web_viewer' feature.
+    #[clap(long)]
+    web_viewer: bool,
+
+    /// What port do we listen to for hosting the web viewer over HTTP.
+    /// A port of 0 will pick a random port.
+    #[cfg(feature = "web_viewer")]
+    #[clap(long, default_value_t = Default::default())]
+    web_viewer_port: WebViewerServerPort,
+
+    /// What port do we listen to for incoming websocket connections from the viewer
+    /// A port of 0 will pick a random port.
+    #[cfg(feature = "web_viewer")]
+    #[clap(long, default_value_t = Default::default())]
+    ws_server_port: RerunServerPort,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -187,6 +225,11 @@ where
         return Ok(0);
     }
 
+    if args.strict {
+        re_log::add_boxed_logger(Box::new(StrictLogger {})).expect("Failed to enter --strict mode");
+        re_log::info!("--strict mode: any warning or error will cause Rerun to panic.");
+    }
+
     let res = if let Some(commands) = &args.commands {
         match commands {
             #[cfg(all(feature = "analytics"))]
@@ -255,6 +298,7 @@ async fn run_impl(
             re_memory::MemoryLimit::parse(l)
                 .unwrap_or_else(|err| panic!("Bad --memory-limit: {err}"))
         }),
+        persist_state: args.persist_state,
     };
 
     let (shutdown_rx, shutdown_bool) = setup_ctrl_c_handler();
@@ -263,7 +307,7 @@ async fn run_impl(
     let rx = if let Some(url_or_path) = args.url_or_path.clone() {
         match categorize_argument(url_or_path) {
             ArgumentCategory::RrdHttpUrl(url) => {
-                re_viewer::stream_rrd_from_http::stream_rrd_from_http_to_channel(url)
+                re_log_encoding::stream_rrd_from_http::stream_rrd_from_http_to_channel(url)
             }
             ArgumentCategory::RrdFilePath(path) => {
                 re_log::info!("Loading {path:?}…");
@@ -275,12 +319,19 @@ async fn run_impl(
                 if args.web_viewer {
                     #[cfg(feature = "web_viewer")]
                     {
-                        let web_viewer =
-                            host_web_viewer(true, rerun_server_ws_url, shutdown_rx.resubscribe());
+                        let web_viewer = host_web_viewer(
+                            args.web_viewer_port,
+                            true,
+                            rerun_server_ws_url,
+                            shutdown_rx.resubscribe(),
+                        );
+                        // We return here because the running [`WebViewerServer`] is all we need.
+                        // The page we open will be pointed at a websocket url hosted by a *different* server.
                         return web_viewer.await;
                     }
                     #[cfg(not(feature = "web_viewer"))]
                     {
+                        _ = (rerun_server_ws_url, shutdown_rx);
                         panic!("Can't host web-viewer - rerun was not compiled with the 'web_viewer' feature");
                     }
                 } else {
@@ -295,7 +346,7 @@ async fn run_impl(
 
                     #[cfg(not(feature = "native_viewer"))]
                     {
-                        _ = call_source;
+                        _ = (call_source, rerun_server_ws_url);
                         anyhow::bail!("Can't start viewer - rerun was compiled without the 'native_viewer' feature");
                     }
                 }
@@ -319,13 +370,17 @@ async fn run_impl(
 
     // Now what do we do with the data?
 
-    if let Some(rrd_path) = args.save {
+    if args.test_receive {
+        receive_into_log_db(&rx).map(|_db| ())
+    } else if let Some(rrd_path) = args.save {
         Ok(stream_to_rrd(&rx, &rrd_path.into(), &shutdown_bool)?)
     } else if args.web_viewer {
         #[cfg(feature = "web_viewer")]
         {
             #[cfg(feature = "server")]
-            if args.url_or_path.is_none() && args.port == re_ws_comms::DEFAULT_WS_SERVER_PORT {
+            if args.url_or_path.is_none()
+                && (args.port == args.web_viewer_port.0 || args.port == args.ws_server_port.0)
+            {
                 anyhow::bail!(
                     "Trying to spawn a websocket server on {}, but this port is \
                 already used by the server we're connecting to. Please specify a different port.",
@@ -338,17 +393,21 @@ async fn run_impl(
             let shutdown_web_viewer = shutdown_rx.resubscribe();
 
             // This is the server which the web viewer will talk to:
-            let ws_server = re_ws_comms::Server::new(re_ws_comms::DEFAULT_WS_SERVER_PORT).await?;
+            let ws_server = re_ws_comms::RerunServer::new(args.ws_server_port).await?;
+            let ws_server_url = ws_server.server_url();
             let ws_server_handle = tokio::spawn(ws_server.listen(rx, shutdown_ws_server));
-            let ws_server_url = re_ws_comms::default_server_url("127.0.0.1");
 
             // This is the server that serves the Wasm+HTML:
-            let web_server_handle =
-                tokio::spawn(host_web_viewer(true, ws_server_url, shutdown_web_viewer));
+            let web_server_handle = tokio::spawn(host_web_viewer(
+                args.web_viewer_port,
+                true,
+                ws_server_url,
+                shutdown_web_viewer,
+            ));
 
             // Wait for both servers to shutdown.
             web_server_handle.await?.ok();
-            return ws_server_handle.await?;
+            return ws_server_handle.await?.map_err(anyhow::Error::from);
         }
 
         #[cfg(not(feature = "web_viewer"))]
@@ -390,6 +449,44 @@ async fn run_impl(
             anyhow::bail!(
                 "Can't start viewer - rerun was compiled without the 'native_viewer' feature"
             );
+        }
+    }
+}
+
+fn receive_into_log_db(rx: &Receiver<LogMsg>) -> anyhow::Result<re_data_store::LogDb> {
+    use re_smart_channel::RecvTimeoutError;
+
+    re_log::info!("Receiving messages into a LogDb…");
+
+    let mut db = re_data_store::LogDb::default();
+
+    let mut num_messages = 0;
+
+    let timeout = std::time::Duration::from_secs(12);
+
+    loop {
+        match rx.recv_timeout(timeout) {
+            Ok(msg) => {
+                re_log::info_once!("Received first message.");
+                let is_goodbye = matches!(msg, re_log_types::LogMsg::Goodbye(_));
+                db.add(&msg)?;
+                num_messages += 1;
+                if is_goodbye {
+                    db.entity_db.data_store.sanity_check()?;
+                    anyhow::ensure!(0 < num_messages, "No messages received");
+                    re_log::info!("Successfully ingested {num_messages} messages.");
+                    return Ok(db);
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                anyhow::bail!(
+                    "Didn't receive any messages within {} seconds. Giving up.",
+                    timeout.as_secs()
+                );
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                anyhow::bail!("Channel disconnected without a Goodbye message.");
+            }
         }
     }
 }
@@ -452,7 +549,7 @@ fn native_viewer_connect_to_ws_url(
 fn load_file_to_channel(path: &std::path::Path) -> anyhow::Result<Receiver<LogMsg>> {
     use anyhow::Context as _;
     let file = std::fs::File::open(path).context("Failed to open file")?;
-    let decoder = re_log_types::encoding::Decoder::new(file)?;
+    let decoder = re_log_encoding::decoder::Decoder::new(file)?;
 
     let (tx, rx) = re_smart_channel::smart_channel(re_smart_channel::Source::File {
         path: path.to_owned(),
@@ -482,8 +579,8 @@ fn stream_to_rrd(
     rx: &re_smart_channel::Receiver<LogMsg>,
     path: &std::path::PathBuf,
     shutdown_bool: &Arc<AtomicBool>,
-) -> Result<(), re_sdk::sink::FileSinkError> {
-    use re_sdk::sink::FileSinkError;
+) -> Result<(), re_log_encoding::FileSinkError> {
+    use re_log_encoding::FileSinkError;
     use re_smart_channel::RecvTimeoutError;
 
     if path.exists() {
@@ -494,7 +591,7 @@ fn stream_to_rrd(
 
     let file =
         std::fs::File::create(path).map_err(|err| FileSinkError::CreateFile(path.clone(), err))?;
-    let mut encoder = re_log_types::encoding::Encoder::new(file)?;
+    let mut encoder = re_log_encoding::encoder::Encoder::new(file)?;
 
     while !shutdown_bool.load(std::sync::atomic::Ordering::Relaxed) {
         // We wake up and poll shutdown_bool every now and then.
@@ -532,9 +629,41 @@ pub fn setup_ctrl_c_handler() -> (tokio::sync::broadcast::Receiver<()>, Arc<Atom
     let shutdown = shutdown_return.clone();
     ctrlc::set_handler(move || {
         re_log::debug!("Ctrl-C detected, shutting down.");
-        sender.send(()).unwrap();
+        sender.send(()).ok();
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
     })
     .expect("Error setting Ctrl-C handler");
     (receiver, shutdown_return)
+}
+
+// ----------------------------------------------------------------------------
+
+use re_log::external::log;
+
+struct StrictLogger {}
+
+impl log::Log for StrictLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        match metadata.level() {
+            log::Level::Error | log::Level::Warn => true,
+            log::Level::Info | log::Level::Debug | log::Level::Trace => false,
+        }
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        let level = match record.level() {
+            log::Level::Error => "error",
+            log::Level::Warn => "warning",
+            log::Level::Info | log::Level::Debug | log::Level::Trace => return,
+        };
+
+        eprintln!("{level} logged in --strict mode: {}", record.args());
+        eprintln!(
+            "{}",
+            crate::crash_handler::callstack_from(&["log::__private_api_log"])
+        );
+        std::process::exit(1);
+    }
+
+    fn flush(&self) {}
 }

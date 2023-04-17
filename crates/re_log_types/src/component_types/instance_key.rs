@@ -36,6 +36,12 @@ impl InstanceKey {
     /// for example all points in a point cloud entity.
     pub const SPLAT: Self = Self(u64::MAX);
 
+    #[allow(clippy::should_implement_trait)]
+    #[inline]
+    pub fn from_iter(it: impl IntoIterator<Item = impl Into<Self>>) -> Vec<Self> {
+        it.into_iter().map(Into::into).collect::<Vec<_>>()
+    }
+
     /// Are we referring to all instances of the entity (e.g. all points in a point cloud entity)?
     ///
     /// The opposite of [`Self::is_specific`].
@@ -56,6 +62,16 @@ impl InstanceKey {
     #[inline]
     pub fn specific_index(self) -> Option<InstanceKey> {
         self.is_specific().then_some(self)
+    }
+
+    /// Creates a new [`InstanceKey`] that identifies a 2d coordinate.
+    pub fn from_2d_image_coordinate([x, y]: [u32; 2], image_width: u64) -> Self {
+        Self((x as u64) + (y as u64) * image_width)
+    }
+
+    /// Retrieves 2d image coordinates (x, y) encoded in an instance key
+    pub fn to_2d_image_coordinate(self, image_width: u64) -> [u32; 2] {
+        [(self.0 % image_width) as u32, (self.0 / image_width) as u32]
     }
 }
 

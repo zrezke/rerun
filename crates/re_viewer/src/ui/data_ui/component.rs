@@ -43,7 +43,7 @@ impl DataUi for EntityComponentWithInstances {
         let num_instances = self.num_instances();
 
         let one_line = match verbosity {
-            crate::ui::UiVerbosity::Small | crate::ui::UiVerbosity::MaxHeight(_) => true,
+            crate::ui::UiVerbosity::Small => true,
             crate::UiVerbosity::Reduced | crate::ui::UiVerbosity::All => false,
         };
 
@@ -56,6 +56,7 @@ impl DataUi for EntityComponentWithInstances {
                     ui,
                     verbosity,
                     query,
+                    &self.entity_path,
                     &self.component_data,
                     &instance_key,
                 );
@@ -107,6 +108,7 @@ impl DataUi for EntityComponentWithInstances {
                                     ui,
                                     crate::ui::UiVerbosity::Small,
                                     query,
+                                    &self.entity_path,
                                     &self.component_data,
                                     &instance_key,
                                 );

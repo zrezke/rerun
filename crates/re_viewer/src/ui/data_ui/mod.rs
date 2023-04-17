@@ -1,6 +1,7 @@
 //! The `DataUi` trait and implementations provide methods for representing data using [`egui`].
 
 use itertools::Itertools;
+use re_data_store::EntityPath;
 use re_log_types::{DataCell, PathOp, TimePoint};
 
 use crate::misc::ViewerContext;
@@ -14,7 +15,6 @@ mod entity_path;
 pub(crate) mod image;
 mod instance_path;
 mod log_msg;
-mod msg_id;
 
 pub(crate) use component_ui_registry::ComponentUiRegistry;
 
@@ -24,9 +24,6 @@ pub enum UiVerbosity {
     /// Keep it small enough to fit on one row.
     Small,
 
-    /// At most this height
-    MaxHeight(f32),
-
     /// Display a reduced set, used for hovering.
     Reduced,
 
@@ -34,7 +31,7 @@ pub enum UiVerbosity {
     All,
 }
 
-/// Types implementing [`DataUi`] can draw themselves with a [`ViewerContext`] and [`egui::Ui`].
+/// Types implementing [`DataUi`] can display themselves in an [`egui::Ui`].
 pub(crate) trait DataUi {
     /// If you need to lookup something in the data store, use the given query to do so.
     fn data_ui(
@@ -44,6 +41,37 @@ pub(crate) trait DataUi {
         verbosity: UiVerbosity,
         query: &re_arrow_store::LatestAtQuery,
     );
+}
+
+/// Similar to [`DataUi`], but for data that is related to an entity (e.g. a component).
+///
+/// This is given the context of the entity it is part of so it can do queries.
+pub(crate) trait EntityDataUi {
+    /// If you need to lookup something in the data store, use the given query to do so.
+    fn entity_data_ui(
+        &self,
+        ctx: &mut ViewerContext<'_>,
+        ui: &mut egui::Ui,
+        verbosity: UiVerbosity,
+        entity_path: &EntityPath,
+        query: &re_arrow_store::LatestAtQuery,
+    );
+}
+
+impl<T> EntityDataUi for T
+where
+    T: DataUi,
+{
+    fn entity_data_ui(
+        &self,
+        ctx: &mut ViewerContext<'_>,
+        ui: &mut egui::Ui,
+        verbosity: UiVerbosity,
+        _entity: &EntityPath,
+        query: &re_arrow_store::LatestAtQuery,
+    ) {
+        self.data_ui(ctx, ui, verbosity, query);
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -81,7 +109,7 @@ impl DataUi for [DataCell] {
         sorted.sort_by_key(|cb| cb.component_name());
 
         match verbosity {
-            UiVerbosity::Small | UiVerbosity::MaxHeight(_) => {
+            UiVerbosity::Small => {
                 ui.label(sorted.iter().map(format_cell).join(", "));
             }
 

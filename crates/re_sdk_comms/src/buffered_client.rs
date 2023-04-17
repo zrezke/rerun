@@ -2,7 +2,7 @@ use std::{net::SocketAddr, thread::JoinHandle};
 
 use crossbeam::channel::{select, Receiver, Sender};
 
-use re_log_types::{LogMsg, MsgId};
+use re_log_types::{LogMsg, RowId};
 
 #[derive(Debug, PartialEq, Eq)]
 struct FlushedMsg;
@@ -146,12 +146,14 @@ impl Drop for Client {
     /// Wait until everything has been sent.
     fn drop(&mut self) {
         re_log::debug!("Shutting down the client connection…");
-        self.send(LogMsg::Goodbye(MsgId::random()));
+        self.send(LogMsg::Goodbye(RowId::random()));
         self.flush();
+        // First shut down the encoder:
         self.encode_quit_tx.send(QuitMsg).ok();
+        self.encode_join.take().map(|j| j.join().ok());
+        // Then the other threads:
         self.send_quit_tx.send(InterruptMsg::Quit).ok();
         self.drop_quit_tx.send(QuitMsg).ok();
-        self.encode_join.take().map(|j| j.join().ok());
         self.send_join.take().map(|j| j.join().ok());
         self.drop_join.take().map(|j| j.join().ok());
         re_log::debug!("TCP client has shut down.");
@@ -196,11 +198,14 @@ fn msg_encode(
                         MsgMsg::Flush => PacketMsg::Flush,
                     };
 
-                    packet_tx
-                        .send(packet_msg)
-                        .expect("tcp_sender thread should live longer");
-
-                    msg_drop_tx.send(msg_msg).expect("Main thread should still be alive");
+                    if packet_tx.send(packet_msg).is_err() {
+                        re_log::error!("Failed to send message to tcp_sender thread. Likely a shutdown race-condition.");
+                        return;
+                    }
+                    if msg_drop_tx.send(msg_msg).is_err() {
+                        re_log::error!("Failed to send message to msg_drop thread. Likely a shutdown race-condition");
+                        return;
+                    }
                 } else {
                     return; // channel has closed
                 }

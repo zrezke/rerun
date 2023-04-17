@@ -1,11 +1,13 @@
+use std::collections::BTreeMap;
+
 use ahash::HashMap;
 use itertools::Itertools as _;
 use nohash_hasher::{IntMap, IntSet};
 use smallvec::SmallVec;
 
 use crate::{
-    ArrowMsg, ComponentName, DataCell, DataCellError, DataRow, DataRowError, EntityPath, MsgId,
-    TimePoint,
+    ArrowMsg, ComponentName, DataCell, DataCellError, DataRow, DataRowError, EntityPath, RowId,
+    SizeBytes, TimePoint, Timeline,
 };
 
 // ---
@@ -14,6 +16,11 @@ use crate::{
 pub enum DataTableError {
     #[error("Trying to deserialize data that is missing a column present in the schema: {0:?}")]
     MissingColumn(String),
+
+    #[error(
+        "Trying to deserialize time column data with invalid datatype: {name:?} ({datatype:#?})"
+    )]
+    NotATimeColumn { name: String, datatype: DataType },
 
     #[error("Trying to deserialize column data that doesn't contain any ListArrays: {0:?}")]
     NotAColumn(String),
@@ -36,11 +43,19 @@ pub type DataTableResult<T> = ::std::result::Result<T, DataTableError>;
 
 // ---
 
-type RowIdVec = SmallVec<[MsgId; 4]>;
-type TimePointVec = SmallVec<[TimePoint; 4]>;
-type EntityPathVec = SmallVec<[EntityPath; 4]>;
-type NumInstancesVec = SmallVec<[u32; 4]>;
-type DataCellOptVec = SmallVec<[Option<DataCell>; 4]>;
+pub type RowIdVec = SmallVec<[RowId; 4]>;
+
+pub type TimeOptVec = SmallVec<[Option<i64>; 4]>;
+
+pub type TimePointVec = SmallVec<[TimePoint; 4]>;
+
+pub type ErasedTimeVec = SmallVec<[i64; 4]>;
+
+pub type EntityPathVec = SmallVec<[EntityPath; 4]>;
+
+pub type NumInstancesVec = SmallVec<[u32; 4]>;
+
+pub type DataCellOptVec = SmallVec<[Option<DataCell>; 4]>;
 
 /// A column's worth of [`DataCell`]s: a sparse collection of [`DataCell`]s that share the same
 /// underlying type and likely point to shared, contiguous memory.
@@ -57,6 +72,8 @@ impl std::ops::Deref for DataCellColumn {
         &self.0
     }
 }
+
+// TODO(cmc): Those Deref don't actually do their job most of the time for some reason...
 
 impl std::ops::DerefMut for DataCellColumn {
     #[inline]
@@ -81,7 +98,94 @@ impl std::ops::IndexMut<usize> for DataCellColumn {
     }
 }
 
+impl DataCellColumn {
+    #[inline]
+    pub fn empty(num_rows: usize) -> Self {
+        Self(smallvec::smallvec![None; num_rows])
+    }
+
+    /// Compute and cache the size of each individual underlying [`DataCell`].
+    /// This does nothing for cells whose size has already been computed and cached before.
+    ///
+    /// Beware: this is _very_ costly!
+    #[inline]
+    pub fn compute_all_size_bytes(&mut self) {
+        for cell in &mut self.0 {
+            cell.as_mut().map(|cell| cell.compute_size_bytes());
+        }
+    }
+}
+
+impl SizeBytes for DataCellColumn {
+    #[inline]
+    fn heap_size_bytes(&self) -> u64 {
+        self.0.heap_size_bytes()
+    }
+}
+
 // ---
+
+/// A unique ID for a [`DataTable`].
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    arrow2_convert::ArrowField,
+    arrow2_convert::ArrowSerialize,
+    arrow2_convert::ArrowDeserialize,
+)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[arrow_field(transparent)]
+pub struct TableId(pub(crate) re_tuid::Tuid);
+
+impl std::fmt::Display for TableId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl TableId {
+    pub const ZERO: Self = Self(re_tuid::Tuid::ZERO);
+
+    #[inline]
+    pub fn random() -> Self {
+        Self(re_tuid::Tuid::random())
+    }
+
+    /// Temporary utility while we transition to batching. See #1619.
+    #[doc(hidden)]
+    pub fn into_row_id(self) -> RowId {
+        RowId(self.0)
+    }
+}
+
+impl SizeBytes for TableId {
+    #[inline]
+    fn heap_size_bytes(&self) -> u64 {
+        0
+    }
+}
+
+impl std::ops::Deref for TableId {
+    type Target = re_tuid::Tuid;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for TableId {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 /// A sparse table's worth of data, i.e. a batch of events: a collection of [`DataRow`]s.
 /// This is the top-level layer in our data model.
@@ -121,18 +225,18 @@ impl std::ops::IndexMut<usize> for DataCellColumn {
 ///     let points: &[Point2D] = &[[10.0, 10.0].into(), [20.0, 20.0].into()];
 ///     let colors: &[_] = &[ColorRGBA::from_rgb(128, 128, 128)];
 ///     let labels: &[Label] = &[];
-///     DataRow::from_cells3(MsgId::random(), "a", timepoint(1, 1), num_instances, (points, colors, labels))
+///     DataRow::from_cells3(RowId::random(), "a", timepoint(1, 1), num_instances, (points, colors, labels))
 /// };
 /// let row1 = {
 ///     let num_instances = 0;
 ///     let colors: &[ColorRGBA] = &[];
-///     DataRow::from_cells1(MsgId::random(), "b", timepoint(1, 2), num_instances, colors)
+///     DataRow::from_cells1(RowId::random(), "b", timepoint(1, 2), num_instances, colors)
 /// };
 /// let row2 = {
 ///     let num_instances = 1;
 ///     let colors: &[_] = &[ColorRGBA::from_rgb(255, 255, 255)];
 ///     let labels: &[_] = &[Label("hey".into())];
-///     DataRow::from_cells2(MsgId::random(), "c", timepoint(2, 1), num_instances, (colors, labels))
+///     DataRow::from_cells2(RowId::random(), "c", timepoint(2, 1), num_instances, (colors, labels))
 /// };
 /// let table = DataTable::from_rows(table_id, [row0, row1, row2]);
 /// ```
@@ -142,26 +246,26 @@ impl std::ops::IndexMut<usize> for DataCellColumn {
 ///
 /// The table above translates to the following, where each column is contiguous in memory:
 /// ```text
-/// ┌───────────────────────┬───────────────────────────────────┬────────────────────┬─────────────────────┬─────────────┬──────────────────────────────────┬─────────────────┐
-/// │ rerun.row_id          ┆ rerun.timepoint                   ┆ rerun.entity_path  ┆ rerun.num_instances ┆ rerun.label ┆ rerun.point2d                    ┆ rerun.colorrgba │
-/// ╞═══════════════════════╪═══════════════════════════════════╪════════════════════╪═════════════════════╪═════════════╪══════════════════════════════════╪═════════════════╡
-/// │ {167967218, 54449486} ┆ [{frame_nr, 1, 1}, {clock, 1, 1}] ┆ a                  ┆ 2                   ┆ []          ┆ [{x: 10, y: 10}, {x: 20, y: 20}] ┆ [2155905279]    │
-/// ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
-/// │ {167967218, 54449486} ┆ [{frame_nr, 1, 1}, {clock, 1, 2}] ┆ b                  ┆ 0                   ┆ -           ┆ -                                ┆ []              │
-/// ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
-/// │ {167967218, 54449486} ┆ [{frame_nr, 1, 2}, {clock, 1, 1}] ┆ c                  ┆ 1                   ┆ [hey]       ┆ -                                ┆ [4294967295]    │
-/// └───────────────────────┴───────────────────────────────────┴────────────────────┴─────────────────────┴─────────────┴──────────────────────────────────┴─────────────────┘
+/// ┌──────────┬───────────────────────────────┬──────────────────────────────────┬───────────────────┬─────────────────────┬─────────────┬──────────────────────────────────┬─────────────────┐
+/// │ frame_nr ┆ log_time                      ┆ rerun.row_id                     ┆ rerun.entity_path ┆ rerun.num_instances ┆ rerun.label ┆ rerun.point2d                    ┆ rerun.colorrgba │
+/// ╞══════════╪═══════════════════════════════╪══════════════════════════════════╪═══════════════════╪═════════════════════╪═════════════╪══════════════════════════════════╪═════════════════╡
+/// │ 1        ┆ 2023-04-05 09:36:47.188796402 ┆ 1753004ACBF5D6E651F2983C3DAF260C ┆ a                 ┆ 2                   ┆ []          ┆ [{x: 10, y: 10}, {x: 20, y: 20}] ┆ [2155905279]    │
+/// ├╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+/// │ 1        ┆ 2023-04-05 09:36:47.188852222 ┆ 1753004ACBF5D6E651F2983C3DAF260C ┆ b                 ┆ 0                   ┆ -           ┆ -                                ┆ []              │
+/// ├╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+/// │ 2        ┆ 2023-04-05 09:36:47.188855872 ┆ 1753004ACBF5D6E651F2983C3DAF260C ┆ c                 ┆ 1                   ┆ [hey]       ┆ -                                ┆ [4294967295]    │
+/// └──────────┴───────────────────────────────┴──────────────────────────────────┴───────────────────┴─────────────────────┴─────────────┴──────────────────────────────────┴─────────────────┘
 /// ```
 ///
 /// ## Example
 ///
 /// ```rust
 /// # use re_log_types::{
-/// #     component_types::{ColorRGBA, Label, MsgId, Point2D},
-/// #     DataRow, DataTable, Timeline, TimePoint,
+/// #     component_types::{ColorRGBA, Label, Point2D},
+/// #     DataRow, DataTable, RowId, TableId, Timeline, TimePoint,
 /// # };
 /// #
-/// # let table_id = MsgId::ZERO; // not used (yet)
+/// # let table_id = TableId::random();
 /// #
 /// # let timepoint = |frame_nr: i64, clock: i64| {
 /// #     TimePoint::from([
@@ -177,7 +281,7 @@ impl std::ops::IndexMut<usize> for DataCellColumn {
 ///     let labels: &[Label] = &[];
 ///
 ///     DataRow::from_cells3(
-///         MsgId::random(),
+///         RowId::random(),
 ///         "a",
 ///         timepoint(1, 1),
 ///         num_instances,
@@ -189,7 +293,7 @@ impl std::ops::IndexMut<usize> for DataCellColumn {
 ///     let num_instances = 0;
 ///     let colors: &[ColorRGBA] = &[];
 ///
-///     DataRow::from_cells1(MsgId::random(), "b", timepoint(1, 2), num_instances, colors)
+///     DataRow::from_cells1(RowId::random(), "b", timepoint(1, 2), num_instances, colors)
 /// };
 ///
 /// let row2 = {
@@ -198,7 +302,7 @@ impl std::ops::IndexMut<usize> for DataCellColumn {
 ///     let labels: &[_] = &[Label("hey".into())];
 ///
 ///     DataRow::from_cells2(
-///         MsgId::random(),
+///         RowId::random(),
 ///         "c",
 ///         timepoint(2, 1),
 ///         num_instances,
@@ -218,25 +322,32 @@ impl std::ops::IndexMut<usize> for DataCellColumn {
 /// #
 /// # assert_eq!(table_in, table_out);
 /// ```
-// TODO(#1619): introduce RowId & TableId
 #[derive(Debug, Clone, PartialEq)]
 pub struct DataTable {
     /// Auto-generated `TUID`, uniquely identifying this batch of data and keeping track of the
     /// client's wall-clock.
-    // TODO(#1619): use once batching lands
-    pub table_id: MsgId,
+    pub table_id: TableId,
 
     /// The entire column of `RowId`s.
-    pub row_id: RowIdVec,
+    ///
+    /// Keeps track of the unique identifier for each row that was generated by the clients.
+    pub col_row_id: RowIdVec,
 
-    /// The entire column of [`TimePoint`]s.
-    pub timepoint: TimePointVec,
+    /// All the rows for all the time columns.
+    ///
+    /// The times are optional since not all rows are guaranteed to have a timestamp for every
+    /// single timeline (though it is highly likely to be the case in practice).
+    pub col_timelines: BTreeMap<Timeline, TimeOptVec>,
 
     /// The entire column of [`EntityPath`]s.
-    pub entity_path: EntityPathVec,
+    ///
+    /// The entity each row relates to, respectively.
+    pub col_entity_path: EntityPathVec,
 
     /// The entire column of `num_instances`.
-    pub num_instances: NumInstancesVec,
+    ///
+    /// Keeps track of the expected number of instances in each row.
+    pub col_num_instances: NumInstancesVec,
 
     /// All the rows for all the component columns.
     ///
@@ -247,19 +358,19 @@ pub struct DataTable {
 
 impl DataTable {
     /// Creates a new empty table with the given ID.
-    pub fn new(table_id: MsgId) -> Self {
+    pub fn new(table_id: TableId) -> Self {
         Self {
             table_id,
-            row_id: Default::default(),
-            timepoint: Default::default(),
-            entity_path: Default::default(),
-            num_instances: Default::default(),
+            col_row_id: Default::default(),
+            col_timelines: Default::default(),
+            col_entity_path: Default::default(),
+            col_num_instances: Default::default(),
             columns: Default::default(),
         }
     }
 
     /// Builds a new `DataTable` from an iterable of [`DataRow`]s.
-    pub fn from_rows(table_id: MsgId, rows: impl IntoIterator<Item = DataRow>) -> Self {
+    pub fn from_rows(table_id: TableId, rows: impl IntoIterator<Item = DataRow>) -> Self {
         crate::profile_function!();
 
         let rows = rows.into_iter();
@@ -267,7 +378,7 @@ impl DataTable {
         // Explode all rows into columns, and keep track of which components are involved.
         let mut components = IntSet::default();
         #[allow(clippy::type_complexity)]
-        let (row_id, timepoint, entity_path, num_instances, column): (
+        let (col_row_id, col_timepoint, col_entity_path, col_num_instances, column): (
             RowIdVec,
             TimePointVec,
             EntityPathVec,
@@ -275,7 +386,7 @@ impl DataTable {
             Vec<_>,
         ) = rows
             .map(|row| {
-                components.extend(row.components());
+                components.extend(row.component_names());
                 let DataRow {
                     row_id,
                     timepoint,
@@ -286,6 +397,31 @@ impl DataTable {
                 (row_id, timepoint, entity_path, num_instances, cells)
             })
             .multiunzip();
+
+        // All time columns.
+        let mut col_timelines: BTreeMap<Timeline, TimeOptVec> = BTreeMap::default();
+        for (i, timepoint) in col_timepoint.iter().enumerate() {
+            for (timeline, time) in timepoint.iter() {
+                match col_timelines.entry(*timeline) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry
+                            .insert(smallvec::smallvec![None; i])
+                            .push(Some(time.as_i64()));
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut entry) => {
+                        let entry = entry.get_mut();
+                        entry.push(Some(time.as_i64()));
+                    }
+                }
+            }
+
+            // handle potential sparseness
+            for (timeline, col_time) in &mut col_timelines {
+                if timepoint.get(timeline).is_none() {
+                    col_time.push(None);
+                }
+            }
+        }
 
         // Pre-allocate all columns (one per component).
         let mut columns = IntMap::default();
@@ -305,7 +441,7 @@ impl DataTable {
             }
         }
 
-        if row_id.len() > 1 {
+        if col_row_id.len() > 1 {
             re_log::warn_once!(
                 "batching features are not ready for use, use single-row data tables instead!"
             );
@@ -313,10 +449,10 @@ impl DataTable {
 
         Self {
             table_id,
-            row_id,
-            timepoint,
-            entity_path,
-            num_instances,
+            col_row_id,
+            col_timelines,
+            col_entity_path,
+            col_num_instances,
             columns,
         }
     }
@@ -325,19 +461,19 @@ impl DataTable {
 impl DataTable {
     #[inline]
     pub fn num_rows(&self) -> u32 {
-        self.row_id.len() as _
+        self.col_row_id.len() as _
     }
 
     #[inline]
-    pub fn as_rows(&self) -> impl ExactSizeIterator<Item = DataRow> + '_ {
+    pub fn to_rows(&self) -> impl ExactSizeIterator<Item = DataRow> + '_ {
         let num_rows = self.num_rows() as usize;
 
         let Self {
             table_id: _,
-            row_id,
-            timepoint,
-            entity_path,
-            num_instances,
+            col_row_id,
+            col_timelines,
+            col_entity_path,
+            col_num_instances,
             columns,
         } = self;
 
@@ -347,10 +483,17 @@ impl DataTable {
                 .filter_map(|rows| rows[i].clone() /* shallow */);
 
             DataRow::from_cells(
-                row_id[i],
-                timepoint[i].clone(),
-                entity_path[i].clone(),
-                num_instances[i],
+                col_row_id[i],
+                TimePoint::from(
+                    col_timelines
+                        .iter()
+                        .filter_map(|(timeline, times)| {
+                            times[i].map(|time| (*timeline, time.into()))
+                        })
+                        .collect::<BTreeMap<_, _>>(),
+                ),
+                col_entity_path[i].clone(),
+                col_num_instances[i],
                 cells,
             )
         })
@@ -360,20 +503,58 @@ impl DataTable {
     /// and returns the corresponding [`TimePoint`].
     #[inline]
     pub fn timepoint_max(&self) -> TimePoint {
-        self.timepoint
-            .iter()
-            .fold(TimePoint::timeless(), |acc, tp| acc.union_max(tp))
+        let mut timepoint = TimePoint::timeless();
+        for (timeline, col_time) in &self.col_timelines {
+            if let Some(time) = col_time.iter().flatten().max().copied() {
+                timepoint.insert(*timeline, time.into());
+            }
+        }
+        timepoint
+    }
+
+    /// Compute and cache the total (heap) allocated size of each individual underlying
+    /// [`DataCell`].
+    /// This does nothing for cells whose size has already been computed and cached before.
+    ///
+    /// Beware: this is _very_ costly!
+    #[inline]
+    pub fn compute_all_size_bytes(&mut self) {
+        for column in self.columns.values_mut() {
+            column.compute_all_size_bytes();
+        }
+    }
+}
+
+impl SizeBytes for DataTable {
+    #[inline]
+    fn heap_size_bytes(&self) -> u64 {
+        let Self {
+            table_id,
+            col_row_id,
+            col_timelines,
+            col_entity_path,
+            col_num_instances,
+            columns,
+        } = self;
+
+        table_id.heap_size_bytes()
+            + col_row_id.heap_size_bytes()
+            + col_timelines.heap_size_bytes()
+            + col_entity_path.heap_size_bytes()
+            + col_num_instances.heap_size_bytes()
+            + columns.heap_size_bytes()
     }
 }
 
 // --- Serialization ---
 
 use arrow2::{
-    array::{Array, ListArray},
+    array::{Array, ListArray, PrimitiveArray},
     bitmap::Bitmap,
     chunk::Chunk,
-    datatypes::{DataType, Field, Schema},
+    datatypes::{DataType, Field, Schema, TimeUnit},
     offset::Offsets,
+    types::NativeType,
 };
 use arrow2_convert::{
     deserialize::TryIntoCollection, field::ArrowField, serialize::ArrowSerialize,
@@ -382,6 +563,7 @@ use arrow2_convert::{
 
 // TODO(#1696): Those names should come from the datatypes themselves.
 
+pub const COLUMN_INSERT_ID: &str = "rerun.insert_id";
 pub const COLUMN_ROW_ID: &str = "rerun.row_id";
 pub const COLUMN_TIMEPOINT: &str = "rerun.timepoint";
 pub const COLUMN_ENTITY_PATH: &str = "rerun.entity_path";
@@ -390,6 +572,7 @@ pub const COLUMN_NUM_INSTANCES: &str = "rerun.num_instances";
 pub const METADATA_KIND: &str = "rerun.kind";
 pub const METADATA_KIND_DATA: &str = "data";
 pub const METADATA_KIND_CONTROL: &str = "control";
+pub const METADATA_KIND_TIME: &str = "time";
 pub const METADATA_TABLE_ID: &str = "rerun.table_id";
 
 impl DataTable {
@@ -400,7 +583,10 @@ impl DataTable {
     /// * Control columns are those that drive the behavior of the storage systems.
     ///   They are always present, always dense, and always deserialized upon reception by the
     ///   server.
-    /// * Data columns are the one that hold component data.
+    ///   Internally, time columns are (de)serialized separately from the rest of the control
+    ///   columns for efficiency/QOL concerns: that doesn't change the fact that they are control
+    ///   columns all the same!
+    /// * Data columns are the ones that hold component data.
     ///   They are optional, potentially sparse, and never deserialized on the server-side (not by
     ///   the storage systems, at least).
     pub fn serialize(&self) -> DataTableResult<(Schema, Chunk<Box<dyn Array>>)> {
@@ -408,6 +594,13 @@ impl DataTable {
 
         let mut schema = Schema::default();
         let mut columns = Vec::new();
+
+        {
+            let (control_schema, control_columns) = self.serialize_time_columns();
+            schema.fields.extend(control_schema.fields);
+            schema.metadata.extend(control_schema.metadata);
+            columns.extend(control_columns.into_iter());
+        }
 
         {
             let (control_schema, control_columns) = self.serialize_control_columns()?;
@@ -426,6 +619,43 @@ impl DataTable {
         Ok((schema, Chunk::new(columns)))
     }
 
+    /// Serializes all time columns into an arrow payload and schema.
+    fn serialize_time_columns(&self) -> (Schema, Vec<Box<dyn Array>>) {
+        crate::profile_function!();
+
+        fn serialize_time_column(
+            timeline: Timeline,
+            times: &TimeOptVec,
+        ) -> (Field, Box<dyn Array>) {
+            let data = PrimitiveArray::from(times.as_slice()).to(timeline.datatype());
+
+            let field = Field::new(timeline.name().as_str(), data.data_type().clone(), false)
+                .with_metadata([(METADATA_KIND.to_owned(), METADATA_KIND_TIME.to_owned())].into());
+
+            (field, data.boxed())
+        }
+
+        let Self {
+            table_id: _,
+            col_row_id: _,
+            col_timelines,
+            col_entity_path: _,
+            col_num_instances: _,
+            columns: _,
+        } = self;
+
+        let mut schema = Schema::default();
+        let mut columns = Vec::new();
+
+        for (timeline, col_time) in col_timelines {
+            let (time_field, time_column) = serialize_time_column(*timeline, col_time);
+            schema.fields.push(time_field);
+            columns.push(time_column);
+        }
+
+        (schema, columns)
+    }
+
     /// Serializes all controls columns into an arrow payload and schema.
     ///
     /// Control columns are those that drive the behavior of the storage systems.
@@ -434,28 +664,47 @@ impl DataTable {
     fn serialize_control_columns(&self) -> DataTableResult<(Schema, Vec<Box<dyn Array>>)> {
         crate::profile_function!();
 
-        /// Serializes an iterable of dense arrow-like data.
-        fn serialize_dense_column<C: ArrowSerialize + ArrowField<Type = C> + 'static>(
-            name: &str,
-            values: &[C],
-        ) -> DataTableResult<(Field, Box<dyn Array>)> {
-            let data: Box<dyn Array> = values.try_into_arrow()?;
-            // let data = unit_values_to_unit_lists(data);
+        let Self {
+            table_id,
+            col_row_id,
+            col_timelines: _,
+            col_entity_path,
+            col_num_instances,
+            columns: _,
+        } = self;
 
-            let mut field = Field::new(name, data.data_type().clone(), false).with_metadata(
-                [(METADATA_KIND.to_owned(), METADATA_KIND_CONTROL.to_owned())].into(),
-            );
+        let mut schema = Schema::default();
+        let mut columns = Vec::new();
 
-            // TODO(cmc): why do we have to do this manually on the way out, but it's done
-            // automatically on our behalf on the way in...?
-            if let DataType::Extension(name, _, _) = data.data_type() {
-                field
-                    .metadata
-                    .extend([("ARROW:extension:name".to_owned(), name.clone())]);
-            }
+        let (row_id_field, row_id_column) =
+            Self::serialize_control_column(COLUMN_ROW_ID, col_row_id)?;
+        schema.fields.push(row_id_field);
+        columns.push(row_id_column);
 
-            Ok((field, data))
-        }
+        let (entity_path_field, entity_path_column) =
+            Self::serialize_control_column(COLUMN_ENTITY_PATH, col_entity_path)?;
+        schema.fields.push(entity_path_field);
+        columns.push(entity_path_column);
+
+        let (num_instances_field, num_instances_column) = Self::serialize_primitive_column(
+            COLUMN_NUM_INSTANCES,
+            col_num_instances.as_slice(),
+            None,
+        )?;
+        schema.fields.push(num_instances_field);
+        columns.push(num_instances_column);
+
+        schema.metadata = [(METADATA_TABLE_ID.into(), table_id.to_string())].into();
+
+        Ok((schema, columns))
+    }
+
+    /// Serializes a single control column: an iterable of dense arrow-like data.
+    pub fn serialize_control_column<C: ArrowSerialize + ArrowField<Type = C> + 'static>(
+        name: &str,
+        values: &[C],
+    ) -> DataTableResult<(Field, Box<dyn Array>)> {
+        crate::profile_function!();
 
         /// Transforms an array of unit values into a list of unit arrays.
         ///
@@ -473,41 +722,44 @@ impl DataTable {
             ListArray::<i32>::new(datatype, offsets, array, validity).boxed()
         }
 
-        let Self {
-            table_id,
-            row_id,
-            timepoint,
-            entity_path,
-            num_instances,
-            columns: _,
-        } = self;
+        let data: Box<dyn Array> = values.try_into_arrow()?;
+        // let data = unit_values_to_unit_lists(data);
 
-        let mut schema = Schema::default();
-        let mut columns = Vec::new();
+        let mut field = Field::new(name, data.data_type().clone(), false)
+            .with_metadata([(METADATA_KIND.to_owned(), METADATA_KIND_CONTROL.to_owned())].into());
 
-        let (row_id_field, row_id_column) = serialize_dense_column(COLUMN_ROW_ID, row_id)?;
-        schema.fields.push(row_id_field);
-        columns.push(row_id_column);
+        if let DataType::Extension(name, _, _) = data.data_type() {
+            field
+                .metadata
+                .extend([("ARROW:extension:name".to_owned(), name.clone())]);
+        }
 
-        let (timepoint_field, timepoint_column) =
-            serialize_dense_column(COLUMN_TIMEPOINT, timepoint)?;
-        schema.fields.push(timepoint_field);
-        columns.push(timepoint_column);
+        Ok((field, data))
+    }
 
-        let (entity_path_field, entity_path_column) =
-            serialize_dense_column(COLUMN_ENTITY_PATH, entity_path)?;
-        schema.fields.push(entity_path_field);
-        columns.push(entity_path_column);
+    /// Serializes a single control column; optimized path for primitive datatypes.
+    pub fn serialize_primitive_column<T: NativeType>(
+        name: &str,
+        values: &[T],
+        datatype: Option<DataType>,
+    ) -> DataTableResult<(Field, Box<dyn Array>)> {
+        crate::profile_function!();
 
-        // TODO(#1712): This is unnecessarily slow...
-        let (num_instances_field, num_instances_column) =
-            serialize_dense_column(COLUMN_NUM_INSTANCES, num_instances)?;
-        schema.fields.push(num_instances_field);
-        columns.push(num_instances_column);
+        let data = PrimitiveArray::from_slice(values);
 
-        schema.metadata = [(METADATA_TABLE_ID.into(), table_id.to_string())].into();
+        let datatype = datatype.unwrap_or(data.data_type().clone());
+        let data = data.to(datatype.clone()).boxed();
 
-        Ok((schema, columns))
+        let mut field = Field::new(name, datatype.clone(), false)
+            .with_metadata([(METADATA_KIND.to_owned(), METADATA_KIND_CONTROL.to_owned())].into());
+
+        if let DataType::Extension(name, _, _) = datatype {
+            field
+                .metadata
+                .extend([("ARROW:extension:name".to_owned(), name)]);
+        }
+
+        Ok((field, data))
     }
 
     /// Serializes all data columns into an arrow payload and schema.
@@ -519,57 +771,56 @@ impl DataTable {
 
         let Self {
             table_id: _,
-            row_id: _,
-            timepoint: _,
-            entity_path: _,
-            num_instances: _,
+            col_row_id: _,
+            col_timelines: _,
+            col_entity_path: _,
+            col_num_instances: _,
             columns: table,
         } = self;
 
         let mut schema = Schema::default();
         let mut columns = Vec::new();
 
-        fn serialize_sparse_column(
-            name: &str,
-            column: &[Option<DataCell>],
-        ) -> DataTableResult<(Field, Box<dyn Array>)> {
-            // TODO(cmc): All we're doing here is allocating and filling a nice contiguous array so
-            // our `ListArray`s can compute their indices and for the serializer to work with...
-            // In a far enough future, we could imagine having much finer grain control over the
-            // serializer and doing all of this at once, bypassing all the mem copies and
-            // allocations.
-
-            let cell_refs = column
-                .iter()
-                .flatten()
-                .map(|cell| cell.as_arrow_ref())
-                .collect_vec();
-
-            // NOTE: Avoid paying for the cost of the concatenation machinery if there's a single
-            // row in the column.
-            let data = if cell_refs.len() == 1 {
-                data_to_lists(column, cell_refs[0].to_boxed())
-            } else {
-                // NOTE: This is a column of cells, it shouldn't ever fail to concatenate since
-                // they share the same underlying type.
-                let data = arrow2::compute::concatenate::concatenate(cell_refs.as_slice())?;
-                data_to_lists(column, data)
-            };
-
-            let field = Field::new(name, data.data_type().clone(), false)
-                .with_metadata([(METADATA_KIND.to_owned(), METADATA_KIND_DATA.to_owned())].into());
-
-            Ok((field, data))
+        for (component, rows) in table {
+            let (field, column) = Self::serialize_data_column(component.as_str(), rows)?;
+            schema.fields.push(field);
+            columns.push(column);
         }
+
+        Ok((schema, columns))
+    }
+
+    /// Serializes a single data column.
+    pub fn serialize_data_column(
+        name: &str,
+        column: &[Option<DataCell>],
+    ) -> DataTableResult<(Field, Box<dyn Array>)> {
+        crate::profile_function!();
 
         /// Create a list-array out of a flattened array of cell values.
         ///
         /// * Before: `[C, C, C, C, C, C, C, ...]`
         /// * After: `ListArray[ [[C, C], [C, C, C], None, [C], [C], ...] ]`
-        fn data_to_lists(column: &[Option<DataCell>], data: Box<dyn Array>) -> Box<dyn Array> {
+        fn data_to_lists(
+            column: &[Option<DataCell>],
+            data: Box<dyn Array>,
+            ext_name: Option<String>,
+        ) -> Box<dyn Array> {
             let datatype = data.data_type().clone();
 
-            let datatype = ListArray::<i32>::default_datatype(datatype);
+            let field = {
+                let mut field = Field::new("item", datatype, true);
+
+                if let Some(name) = ext_name {
+                    field
+                        .metadata
+                        .extend([("ARROW:extension:name".to_owned(), name)]);
+                }
+
+                field
+            };
+
+            let datatype = DataType::List(Box::new(field));
             let offsets = Offsets::try_from_lengths(column.iter().map(|cell| {
                 cell.as_ref()
                     .map_or(0, |cell| cell.num_instances() as usize)
@@ -584,24 +835,75 @@ impl DataTable {
             ListArray::<i32>::new(datatype, offsets, data, validity.into()).boxed()
         }
 
-        for (component, rows) in table {
-            let (field, column) = serialize_sparse_column(component.as_str(), rows)?;
-            schema.fields.push(field);
-            columns.push(column);
-        }
+        // TODO(cmc): All we're doing here is allocating and filling a nice contiguous array so
+        // our `ListArray`s can compute their indices and for the serializer to work with...
+        // In a far enough future, we could imagine having much finer grain control over the
+        // serializer and doing all of this at once, bypassing all the mem copies and
+        // allocations.
 
-        Ok((schema, columns))
+        let cell_refs = column
+            .iter()
+            .flatten()
+            .map(|cell| cell.as_arrow_ref())
+            .collect_vec();
+
+        let ext_name = cell_refs.first().and_then(|cell| match cell.data_type() {
+            DataType::Extension(name, _, _) => Some(name),
+            _ => None,
+        });
+
+        // NOTE: Avoid paying for the cost of the concatenation machinery if there's a single
+        // row in the column.
+        let data = if cell_refs.len() == 1 {
+            data_to_lists(column, cell_refs[0].to_boxed(), ext_name.cloned())
+        } else {
+            // NOTE: This is a column of cells, it shouldn't ever fail to concatenate since
+            // they share the same underlying type.
+            let data =
+                arrow2::compute::concatenate::concatenate(cell_refs.as_slice()).map_err(|err| {
+                    re_log::warn_once!("failed to concatenate cells for column {name}");
+                    err
+                })?;
+            data_to_lists(column, data, ext_name.cloned())
+        };
+
+        let field = Field::new(name, data.data_type().clone(), false)
+            .with_metadata([(METADATA_KIND.to_owned(), METADATA_KIND_DATA.to_owned())].into());
+
+        Ok((field, data))
     }
 }
 
 impl DataTable {
     /// Deserializes an entire table from an arrow payload and schema.
     pub fn deserialize(
-        table_id: MsgId,
+        table_id: TableId,
         schema: &Schema,
         chunk: &Chunk<Box<dyn Array>>,
     ) -> DataTableResult<Self> {
         crate::profile_function!();
+
+        // --- Time ---
+
+        let col_timelines: DataTableResult<_> = schema
+            .fields
+            .iter()
+            .enumerate()
+            .filter_map(|(i, field)| {
+                field.metadata.get(METADATA_KIND).and_then(|kind| {
+                    (kind == METADATA_KIND_TIME).then_some((field.name.as_str(), i))
+                })
+            })
+            .map(|(name, index)| {
+                chunk
+                    .get(index)
+                    .ok_or(DataTableError::MissingColumn(name.to_owned()))
+                    .and_then(|column| Self::deserialize_time_column(name, &**column))
+            })
+            .collect();
+        let col_timelines = col_timelines?;
+
+        // --- Control ---
 
         let control_indices: HashMap<&str, usize> = schema
             .fields
@@ -621,15 +923,15 @@ impl DataTable {
         };
 
         // NOTE: the unwrappings cannot fail since control_index() makes sure the index is valid
-        let row_id =
+        let col_row_id =
             (&**chunk.get(control_index(COLUMN_ROW_ID)?).unwrap()).try_into_collection()?;
-        let timepoint =
-            (&**chunk.get(control_index(COLUMN_TIMEPOINT)?).unwrap()).try_into_collection()?;
-        let entity_path =
+        let col_entity_path =
             (&**chunk.get(control_index(COLUMN_ENTITY_PATH)?).unwrap()).try_into_collection()?;
         // TODO(#1712): This is unnecessarily slow...
-        let num_instances =
+        let col_num_instances =
             (&**chunk.get(control_index(COLUMN_NUM_INSTANCES)?).unwrap()).try_into_collection()?;
+
+        // --- Components ---
 
         let columns: DataTableResult<_> = schema
             .fields
@@ -655,12 +957,41 @@ impl DataTable {
 
         Ok(Self {
             table_id,
-            row_id,
-            timepoint,
-            entity_path,
-            num_instances,
+            col_row_id,
+            col_timelines,
+            col_entity_path,
+            col_num_instances,
             columns,
         })
+    }
+
+    /// Deserializes a sparse time column.
+    fn deserialize_time_column(
+        name: &str,
+        column: &dyn Array,
+    ) -> DataTableResult<(Timeline, TimeOptVec)> {
+        crate::profile_function!();
+
+        // See also [`Timeline::datatype`]
+        let timeline = match column.data_type().to_logical_type() {
+            DataType::Int64 => Timeline::new_sequence(name),
+            DataType::Timestamp(TimeUnit::Nanosecond, None) => Timeline::new_temporal(name),
+            _ => {
+                return Err(DataTableError::NotATimeColumn {
+                    name: name.into(),
+                    datatype: column.data_type().clone(),
+                })
+            }
+        };
+
+        let col_time = column
+            .as_any()
+            .downcast_ref::<PrimitiveArray<i64>>()
+            // NOTE: cannot fail, datatype checked above
+            .unwrap();
+        let col_time: TimeOptVec = col_time.into_iter().map(|time| time.copied()).collect();
+
+        Ok((timeline, col_time))
     }
 
     /// Deserializes a sparse data column.
@@ -668,12 +999,15 @@ impl DataTable {
         component: ComponentName,
         column: &dyn Array,
     ) -> DataTableResult<DataCellColumn> {
+        crate::profile_function!();
         Ok(DataCellColumn(
             column
                 .as_any()
                 .downcast_ref::<ListArray<i32>>()
                 .ok_or(DataTableError::NotAColumn(component.to_string()))?
                 .iter()
+                // TODO(#1805): Schema metadata gets cloned in every single array.
+                // This'll become a problem as soon as we enable batching.
                 .map(|array| array.map(|values| DataCell::from_arrow(component, values)))
                 .collect(),
         ))
@@ -682,11 +1016,10 @@ impl DataTable {
 
 // ---
 
-impl TryFrom<&ArrowMsg> for DataTable {
-    type Error = DataTableError;
-
+impl DataTable {
+    /// Deserializes the contents of an [`ArrowMsg`] into a `DataTable`.
     #[inline]
-    fn try_from(msg: &ArrowMsg) -> DataTableResult<Self> {
+    pub fn from_arrow_msg(msg: &ArrowMsg) -> DataTableResult<Self> {
         let ArrowMsg {
             table_id,
             timepoint_max: _,
@@ -696,18 +1029,17 @@ impl TryFrom<&ArrowMsg> for DataTable {
 
         Self::deserialize(*table_id, schema, chunk)
     }
-}
 
-impl TryFrom<&DataTable> for ArrowMsg {
-    type Error = DataTableError;
-
+    /// Serializes the contents of a `DataTable` into an [`ArrowMsg`].
+    //
+    // TODO(#1760): support serializing the cell size itself, so it can be computed on the clients.
     #[inline]
-    fn try_from(table: &DataTable) -> DataTableResult<Self> {
-        let timepoint_max = table.timepoint_max();
-        let (schema, chunk) = table.serialize()?;
+    pub fn to_arrow_msg(&self) -> DataTableResult<ArrowMsg> {
+        let timepoint_max = self.timepoint_max();
+        let (schema, chunk) = self.serialize()?;
 
         Ok(ArrowMsg {
-            table_id: table.table_id,
+            table_id: self.table_id,
             timepoint_max,
             schema,
             chunk,
@@ -729,5 +1061,72 @@ impl std::fmt::Display for DataTable {
             schema.fields.iter().map(|field| field.name.as_str()),
         )
         .fmt(f)
+    }
+}
+
+// ---
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DataTable {
+    /// Crafts a simple but interesting `DataTable`.
+    pub fn example(timeless: bool) -> Self {
+        use crate::{
+            component_types::{ColorRGBA, Label, Point2D},
+            Time,
+        };
+
+        let table_id = TableId::random();
+
+        let timepoint = |frame_nr: i64| {
+            if timeless {
+                TimePoint::timeless()
+            } else {
+                TimePoint::from([
+                    (Timeline::new_temporal("log_time"), Time::now().into()),
+                    (Timeline::new_sequence("frame_nr"), frame_nr.into()),
+                ])
+            }
+        };
+
+        let row0 = {
+            let num_instances = 2;
+            let points: &[Point2D] = &[[10.0, 10.0].into(), [20.0, 20.0].into()];
+            let colors: &[_] = &[ColorRGBA::from_rgb(128, 128, 128)];
+            let labels: &[Label] = &[];
+
+            DataRow::from_cells3(
+                RowId::random(),
+                "a",
+                timepoint(1),
+                num_instances,
+                (points, colors, labels),
+            )
+        };
+
+        let row1 = {
+            let num_instances = 0;
+            let colors: &[ColorRGBA] = &[];
+
+            DataRow::from_cells1(RowId::random(), "b", timepoint(1), num_instances, colors)
+        };
+
+        let row2 = {
+            let num_instances = 1;
+            let colors: &[_] = &[ColorRGBA::from_rgb(255, 255, 255)];
+            let labels: &[_] = &[Label("hey".into())];
+
+            DataRow::from_cells2(
+                RowId::random(),
+                "c",
+                timepoint(2),
+                num_instances,
+                (colors, labels),
+            )
+        };
+
+        let mut table = DataTable::from_rows(table_id, [row0, row1, row2]);
+        table.compute_all_size_bytes();
+
+        table
     }
 }

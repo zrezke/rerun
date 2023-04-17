@@ -21,10 +21,10 @@ use crate::{
     view_builder::ViewBuilder,
     wgpu_resources::{
         BindGroupDesc, BindGroupEntry, BindGroupLayoutDesc, GpuBindGroup, GpuBindGroupLayoutHandle,
-        GpuRenderPipelineHandle, GpuTexture, PipelineLayoutDesc, RenderPipelineDesc, TextureDesc,
-        TextureRowDataInfo,
+        GpuRenderPipelineHandle, GpuTexture, PipelineLayoutDesc, RenderPipelineDesc,
+        Texture2DBufferInfo, TextureDesc,
     },
-    ColorMap, OutlineMaskPreference, PickingLayerProcessor,
+    Colormap, OutlineMaskPreference, PickingLayerObjectId, PickingLayerProcessor,
 };
 
 use super::{
@@ -35,7 +35,7 @@ use super::{
 // ---
 
 mod gpu_data {
-    use crate::wgpu_buffer_types;
+    use crate::{wgpu_buffer_types, PickingLayerObjectId};
 
     /// Keep in sync with mirror in `depth_cloud.wgsl.`
     #[repr(C, align(256))]
@@ -47,6 +47,7 @@ mod gpu_data {
         pub depth_camera_intrinsics: wgpu_buffer_types::Mat3,
 
         pub outline_mask_id: wgpu_buffer_types::UVec2,
+        pub picking_layer_object_id: PickingLayerObjectId,
 
         /// Multiplier to get world-space depth from whatever is in the texture.
         pub world_depth_from_texture_value: f32,
@@ -57,14 +58,13 @@ mod gpu_data {
         /// The maximum depth value in world-space, for use with the colormap.
         pub max_depth_in_world: f32,
 
+        /// Which colormap should be used.
         pub colormap: u32,
 
         /// Changes over different draw-phases.
-        pub radius_boost_in_ui_points: f32,
+        pub radius_boost_in_ui_points: wgpu_buffer_types::F32RowPadded,
 
-        pub row_pad: f32,
-
-        pub end_padding: [wgpu_buffer_types::PaddingRow; 16 - 4 - 3 - 1 - 1],
+        pub end_padding: [wgpu_buffer_types::PaddingRow; 16 - 4 - 3 - 1 - 1 - 1],
     }
 
     impl DepthCloudInfoUBO {
@@ -82,6 +82,7 @@ mod gpu_data {
                 depth_data,
                 colormap,
                 outline_mask_id,
+                picking_object_id,
             } = depth_cloud;
 
             let user_depth_from_texture_value = match depth_data {
@@ -99,8 +100,8 @@ mod gpu_data {
                 point_radius_from_world_depth: *point_radius_from_world_depth,
                 max_depth_in_world: *max_depth_in_world,
                 colormap: *colormap as u32,
-                radius_boost_in_ui_points,
-                row_pad: Default::default(),
+                radius_boost_in_ui_points: radius_boost_in_ui_points.into(),
+                picking_layer_object_id: *picking_object_id,
                 end_padding: Default::default(),
             }
         }
@@ -160,10 +161,44 @@ pub struct DepthCloud {
     pub depth_data: DepthCloudDepthData,
 
     /// Configures color mapping mode.
-    pub colormap: ColorMap,
+    pub colormap: Colormap,
 
     /// Option outline mask id preference.
     pub outline_mask_id: OutlineMaskPreference,
+
+    /// Picking object id that applies for the entire depth cloud.
+    pub picking_object_id: PickingLayerObjectId,
+}
+
+impl DepthCloud {
+    /// World-space bounding-box.
+    pub fn bbox(&self) -> macaw::BoundingBox {
+        let max_depth = self.max_depth_in_world;
+        let w = self.depth_dimensions.x as f32;
+        let h = self.depth_dimensions.y as f32;
+        let corners = [
+            glam::Vec3::ZERO, // camera origin
+            glam::Vec3::new(0.0, 0.0, max_depth),
+            glam::Vec3::new(0.0, h, max_depth),
+            glam::Vec3::new(w, 0.0, max_depth),
+            glam::Vec3::new(w, h, max_depth),
+        ];
+
+        let intrinsics = self.depth_camera_intrinsics;
+        let focal_length = glam::vec2(intrinsics.col(0).x, intrinsics.col(1).y);
+        let offset = intrinsics.col(2).truncate();
+
+        let mut bbox = macaw::BoundingBox::nothing();
+
+        for corner in corners {
+            let depth = corner.z;
+            let pos_in_obj = ((corner.truncate() - offset) * depth / focal_length).extend(depth);
+            let pos_in_world = self.world_from_obj.project_point3(pos_in_obj);
+            bbox.extend(pos_in_world);
+        }
+
+        bbox
+    }
 }
 
 pub struct DepthClouds {
@@ -336,34 +371,33 @@ fn create_and_upload_texture<T: bytemuck::Pod>(
         .textures
         .alloc(&ctx.device, &depth_texture_desc);
 
-    let TextureRowDataInfo {
-        bytes_per_row_unpadded: bytes_per_row_unaligned,
-        bytes_per_row_padded,
-    } = TextureRowDataInfo::new(depth_texture_desc.format, depth_texture_desc.size.width);
-
     // Not supporting compressed formats here.
     debug_assert!(depth_texture_desc.format.describe().block_dimensions == (1, 1));
 
+    let buffer_info =
+        Texture2DBufferInfo::new(depth_texture_desc.format, depth_cloud.depth_dimensions);
+
     // TODO(andreas): CpuGpuWriteBelt should make it easier to do this.
-    let bytes_padding_per_row = (bytes_per_row_padded - bytes_per_row_unaligned) as usize;
+    let bytes_padding_per_row =
+        (buffer_info.bytes_per_row_padded - buffer_info.bytes_per_row_unpadded) as usize;
     // Sanity check the padding size. If this happens something is seriously wrong, as it would imply
     // that we can't express the required alignment with the block size.
     debug_assert!(
         bytes_padding_per_row % std::mem::size_of::<T>() == 0,
         "Padding is not a multiple of pixel size. Can't correctly pad the texture data"
     );
-    let num_pixel_padding_per_row = bytes_padding_per_row / std::mem::size_of::<T>();
 
     let mut depth_texture_staging = ctx.cpu_write_gpu_read_belt.lock().allocate::<T>(
         &ctx.device,
         &ctx.gpu_resources.buffers,
-        data.len() + num_pixel_padding_per_row * depth_texture_desc.size.height as usize,
+        buffer_info.buffer_size_padded as usize / std::mem::size_of::<T>(),
     );
 
     // Fill with a single copy if possible, otherwise do multiple, filling in padding.
-    if num_pixel_padding_per_row == 0 {
+    if bytes_padding_per_row == 0 {
         depth_texture_staging.extend_from_slice(data);
     } else {
+        let num_pixel_padding_per_row = bytes_padding_per_row / std::mem::size_of::<T>();
         for row in data.chunks(depth_texture_desc.size.width as usize) {
             depth_texture_staging.extend_from_slice(row);
             depth_texture_staging
@@ -552,7 +586,7 @@ impl Renderer for DepthCloudRenderer {
 
             let bind_group = match phase {
                 DrawPhase::OutlineMask => &instance.bind_group_outline,
-                DrawPhase::Opaque | DrawPhase::PickingLayer => &instance.bind_group_opaque,
+                DrawPhase::PickingLayer | DrawPhase::Opaque => &instance.bind_group_opaque,
                 _ => unreachable!(),
             };
 

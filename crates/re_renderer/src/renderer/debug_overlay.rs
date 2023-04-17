@@ -93,7 +93,7 @@ impl DebugOverlayDrawData {
             "DebugOverlayDrawData".into(),
             gpu_data::DebugOverlayUniformBuffer {
                 screen_resolution: screen_resolution.as_vec2().into(),
-                position_in_pixel: overlay_rect.top_left_corner.as_vec2().into(),
+                position_in_pixel: overlay_rect.left_top.as_vec2().into(),
                 extent_in_pixel: overlay_rect.extent.as_vec2().into(),
                 mode: mode as u32,
                 _padding: 0,
@@ -189,7 +189,7 @@ impl Renderer for DebugOverlayRenderer {
         );
         let render_pipeline = pools.render_pipelines.get_or_create(
             device,
-            &(RenderPipelineDesc {
+            &RenderPipelineDesc {
                 label: "DebugOverlayDrawData::render_pipeline_regular".into(),
                 pipeline_layout: pools.pipeline_layouts.get_or_create(
                     device,
@@ -212,7 +212,7 @@ impl Renderer for DebugOverlayRenderer {
                 },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
-            }),
+            },
             &pools.pipeline_layouts,
             &pools.shader_modules,
         );

@@ -8,7 +8,7 @@ use re_data_store::EntityPath;
 use re_log_types::{
     component_types::{ClassId, KeypointId},
     context::{AnnotationInfo, ClassDescription},
-    AnnotationContext, Component, MsgId,
+    AnnotationContext, RowId,
 };
 use re_query::query_entity_with_primary;
 
@@ -16,44 +16,59 @@ use crate::{misc::ViewerContext, ui::scene::SceneQuery};
 
 #[derive(Clone, Debug)]
 pub struct Annotations {
-    pub msg_id: MsgId,
+    pub row_id: RowId,
     pub context: AnnotationContext,
 }
 
 impl Annotations {
+    #[inline]
     pub fn class_description(&self, class_id: Option<ClassId>) -> ResolvedClassDescription<'_> {
-        ResolvedClassDescription(
-            class_id.and_then(|class_id| self.context.class_map.get(&class_id)),
-        )
+        ResolvedClassDescription {
+            class_id,
+            class_description: class_id.and_then(|class_id| self.context.class_map.get(&class_id)),
+        }
     }
 }
 
-pub struct ResolvedClassDescription<'a>(pub Option<&'a ClassDescription>);
+pub struct ResolvedClassDescription<'a> {
+    pub class_id: Option<ClassId>,
+    pub class_description: Option<&'a ClassDescription>,
+}
 
 impl<'a> ResolvedClassDescription<'a> {
+    #[inline]
     pub fn annotation_info(&self) -> ResolvedAnnotationInfo {
-        ResolvedAnnotationInfo(self.0.map(|desc| desc.info.clone()))
+        ResolvedAnnotationInfo {
+            class_id: self.class_id,
+            annotation_info: self.class_description.map(|desc| desc.info.clone()),
+        }
     }
 
     /// Merges class annotation info with keypoint annotation info (if existing respectively).
     pub fn annotation_info_with_keypoint(&self, keypoint_id: KeypointId) -> ResolvedAnnotationInfo {
-        if let Some(desc) = self.0 {
+        if let Some(desc) = self.class_description {
             // Assuming that keypoint annotation is the rarer case, merging the entire annotation ahead of time
             // is cheaper than doing it lazily (which would cause more branches down the line for callsites without keypoints)
             if let Some(keypoint_annotation_info) = desc.keypoint_map.get(&keypoint_id) {
-                ResolvedAnnotationInfo(Some(AnnotationInfo {
-                    id: keypoint_id.0,
-                    label: keypoint_annotation_info
-                        .label
-                        .clone()
-                        .or_else(|| desc.info.label.clone()),
-                    color: keypoint_annotation_info.color.or(desc.info.color),
-                }))
+                ResolvedAnnotationInfo {
+                    class_id: self.class_id,
+                    annotation_info: Some(AnnotationInfo {
+                        id: keypoint_id.0,
+                        label: keypoint_annotation_info
+                            .label
+                            .clone()
+                            .or_else(|| desc.info.label.clone()),
+                        color: keypoint_annotation_info.color.or(desc.info.color),
+                    }),
+                }
             } else {
                 self.annotation_info()
             }
         } else {
-            ResolvedAnnotationInfo(None)
+            ResolvedAnnotationInfo {
+                class_id: self.class_id,
+                annotation_info: None,
+            }
         }
     }
 }
@@ -66,7 +81,10 @@ pub enum DefaultColor<'a> {
 }
 
 #[derive(Clone)]
-pub struct ResolvedAnnotationInfo(pub Option<AnnotationInfo>);
+pub struct ResolvedAnnotationInfo {
+    pub class_id: Option<ClassId>,
+    pub annotation_info: Option<AnnotationInfo>,
+}
 
 impl ResolvedAnnotationInfo {
     pub fn color(
@@ -76,17 +94,18 @@ impl ResolvedAnnotationInfo {
     ) -> re_renderer::Color32 {
         if let Some([r, g, b, a]) = color {
             re_renderer::Color32::from_rgba_premultiplied(*r, *g, *b, *a)
-        } else if let Some(color) = self.0.as_ref().and_then(|info| {
+        } else if let Some(color) = self.annotation_info.as_ref().and_then(|info| {
             info.color
                 .map(|c| c.into())
                 .or_else(|| Some(auto_color(info.id)))
         }) {
             color
         } else {
-            match default_color {
-                DefaultColor::TransparentBlack => re_renderer::Color32::TRANSPARENT,
-                DefaultColor::OpaqueWhite => re_renderer::Color32::WHITE,
-                DefaultColor::EntityPath(entity_path) => {
+            match (self.class_id, default_color) {
+                (Some(class_id), _) if class_id.0 != 0 => auto_color(class_id.0),
+                (_, DefaultColor::TransparentBlack) => re_renderer::Color32::TRANSPARENT,
+                (_, DefaultColor::OpaqueWhite) => re_renderer::Color32::WHITE,
+                (_, DefaultColor::EntityPath(entity_path)) => {
                     auto_color((entity_path.hash64() % std::u16::MAX as u64) as u16)
                 }
             }
@@ -97,7 +116,7 @@ impl ResolvedAnnotationInfo {
         if let Some(label) = label {
             Some(label.clone())
         } else {
-            self.0
+            self.annotation_info
                 .as_ref()
                 .and_then(|info| info.label.as_ref().map(|label| label.0.clone()))
         }
@@ -145,18 +164,16 @@ impl AnnotationMap {
                             data_store,
                             &latest_at_query,
                             &parent,
-                            &[MsgId::name()],
+                            &[],
                         )
                         .ok()
                         .and_then(|entity| {
-                            if let (Some(context), Some(msg_id)) = (
-                                entity.iter_primary().ok()?.next()?,
-                                entity.iter_component::<MsgId>().ok()?.next()?,
-                            ) {
-                                Some(entry.insert(Arc::new(Annotations { msg_id, context })))
-                            } else {
-                                None
-                            }
+                            entity.iter_primary().ok()?.next()?.map(|context| {
+                                entry.insert(Arc::new(Annotations {
+                                    row_id: entity.row_id(),
+                                    context,
+                                }))
+                            })
                         })
                         .is_some()
                         {
@@ -172,15 +189,15 @@ impl AnnotationMap {
     }
 
     // Search through the all prefixes of this entity path until we find a
-    // matching annotation. If we find nothing return the default `MISSING_ANNOTATIONS`.
-    pub fn find<'a>(&self, entity_path: impl Into<&'a EntityPath>) -> Arc<Annotations> {
-        let mut next_parent = Some(entity_path.into().clone());
+    // matching annotation. If we find nothing return the default [`MISSING_ANNOTATIONS`].
+    pub fn find(&self, entity_path: &EntityPath) -> Arc<Annotations> {
+        let mut next_parent = Some(entity_path.clone());
         while let Some(parent) = next_parent {
             if let Some(legend) = self.0.get(&parent) {
                 return legend.clone();
             }
 
-            next_parent = parent.parent().clone();
+            next_parent = parent.parent();
         }
 
         // Otherwise return the missing legend
@@ -190,12 +207,12 @@ impl AnnotationMap {
 
 // ---
 
-const MISSING_MSG_ID: MsgId = MsgId::ZERO;
+const MISSING_ROW_ID: RowId = RowId::ZERO;
 
 lazy_static! {
     pub static ref MISSING_ANNOTATIONS: Arc<Annotations> = {
         Arc::new(Annotations {
-            msg_id: MISSING_MSG_ID,
+            row_id: MISSING_ROW_ID,
             context: Default::default(),
         })
     };

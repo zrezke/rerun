@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use re_arrow_store::LatestAtQuery;
+use re_data_store::EntityPath;
 use re_log_types::{
     component_types::InstanceKey, external::arrow2, Component, ComponentName,
     DeserializableComponent,
@@ -9,7 +10,7 @@ use re_query::ComponentWithInstances;
 
 use crate::{misc::ViewerContext, ui::UiVerbosity};
 
-use super::DataUi;
+use super::{DataUi, EntityDataUi};
 
 type ComponentUiCallback = Box<
     dyn Fn(
@@ -17,6 +18,7 @@ type ComponentUiCallback = Box<
         &mut egui::Ui,
         UiVerbosity,
         &LatestAtQuery,
+        &EntityPath,
         &ComponentWithInstances,
         &InstanceKey,
     ),
@@ -47,7 +49,6 @@ impl Default for ComponentUiRegistry {
         registry.add::<re_log_types::component_types::LineStrip2D>();
         registry.add::<re_log_types::component_types::LineStrip3D>();
         registry.add::<re_log_types::component_types::Mesh3D>();
-        registry.add::<re_log_types::component_types::MsgId>();
         // registry.add::<re_log_types::component_types::Point2D>();
         // registry.add::<re_log_types::component_types::Point3D>();
         // registry.add::<re_log_types::component_types::Quaternion>();
@@ -68,33 +69,39 @@ impl Default for ComponentUiRegistry {
 }
 
 impl ComponentUiRegistry {
-    fn add<C: DeserializableComponent + DataUi>(&mut self)
+    fn add<C: DeserializableComponent + EntityDataUi>(&mut self)
     where
         for<'a> &'a C::ArrayType: IntoIterator,
     {
         self.components.insert(
             C::name(),
-            Box::new(|ctx, ui, verbosity, query, component, instance| {
-                match component.lookup::<C>(instance) {
-                    Ok(component) => component.data_ui(ctx, ui, verbosity, query),
+            Box::new(
+                |ctx, ui, verbosity, query, entity_path, component, instance| match component
+                    .lookup::<C>(instance)
+                {
+                    Ok(component) => {
+                        component.entity_data_ui(ctx, ui, verbosity, entity_path, query);
+                    }
                     Err(re_query::QueryError::ComponentNotFound) => {
                         ui.weak("(not found)");
                     }
                     Err(err) => {
                         re_log::warn_once!("Expected component {}, {}", C::name(), err);
                     }
-                }
-            }),
+                },
+            ),
         );
     }
 
     /// Show a ui for this instance of this component.
+    #[allow(clippy::too_many_arguments)]
     pub fn ui(
         &self,
         ctx: &mut crate::misc::ViewerContext<'_>,
         ui: &mut egui::Ui,
         verbosity: crate::ui::UiVerbosity,
         query: &LatestAtQuery,
+        entity_path: &EntityPath,
         component: &ComponentWithInstances,
         instance_key: &InstanceKey,
     ) {
@@ -107,7 +114,15 @@ impl ComponentUiRegistry {
         }
 
         if let Some(ui_callback) = self.components.get(&component.name()) {
-            (*ui_callback)(ctx, ui, verbosity, query, component, instance_key);
+            (*ui_callback)(
+                ctx,
+                ui,
+                verbosity,
+                query,
+                entity_path,
+                component,
+                instance_key,
+            );
         } else {
             // No special ui implementation - use a generic one:
             if let Some(value) = component.lookup_arrow(instance_key) {
@@ -143,7 +158,7 @@ impl DataUi for re_log_types::component_types::TextEntry {
         let Self { body, level } = self;
 
         match verbosity {
-            UiVerbosity::Small | UiVerbosity::MaxHeight(_) => {
+            UiVerbosity::Small => {
                 ui.horizontal(|ui| {
                     if let Some(level) = level {
                         ui.label(level_to_rich_text(ui, level));

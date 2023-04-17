@@ -1,17 +1,21 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use arrow2::array::{Array, UnionArray};
+use arrow2::array::UnionArray;
 use criterion::{criterion_group, criterion_main, Criterion};
 
-use re_arrow_store::{DataStore, DataStoreConfig, LatestAtQuery, RangeQuery, TimeInt, TimeRange};
+use re_arrow_store::{
+    DataStore, DataStoreConfig, GarbageCollectionTarget, LatestAtQuery, RangeQuery, TimeInt,
+    TimeRange,
+};
 use re_log_types::{
     component_types::{InstanceKey, Rect2D},
     datagen::{build_frame_nr, build_some_instances, build_some_rects},
-    Component as _, ComponentName, DataRow, DataTable, EntityPath, MsgId, TimeType, Timeline,
+    Component as _, ComponentName, DataCell, DataRow, DataTable, EntityPath, RowId, TableId,
+    TimeType, Timeline,
 };
 
-criterion_group!(benches, insert, latest_at, latest_at_missing, range);
+criterion_group!(benches, insert, latest_at, latest_at_missing, range, gc);
 criterion_main!(benches);
 
 // ---
@@ -27,10 +31,32 @@ const NUM_ROWS: i64 = 1;
 #[cfg(debug_assertions)]
 const NUM_INSTANCES: i64 = 1;
 
+fn packed() -> &'static [bool] {
+    #[cfg(feature = "core_benchmarks_only")]
+    {
+        &[false]
+    }
+    #[cfg(not(feature = "core_benchmarks_only"))]
+    {
+        &[false, true]
+    }
+}
+
+fn num_rows_per_bucket() -> &'static [u64] {
+    #[cfg(feature = "core_benchmarks_only")]
+    {
+        &[]
+    }
+    #[cfg(not(feature = "core_benchmarks_only"))]
+    {
+        &[0, 2, 32, 2048]
+    }
+}
+
 // --- Benchmarks ---
 
 fn insert(c: &mut Criterion) {
-    for packed in [false, true] {
+    for &packed in packed() {
         let mut group = c.benchmark_group(format!(
             "datastore/num_rows={NUM_ROWS}/num_instances={NUM_INSTANCES}/packed={packed}/insert"
         ));
@@ -45,17 +71,13 @@ fn insert(c: &mut Criterion) {
             b.iter(|| insert_table(Default::default(), InstanceKey::name(), &table));
         });
 
-        // Emulate more or less buckets
-        let num_rows_per_bucket = [0, 2, 32, 2048];
-        for num_rows_per_bucket in num_rows_per_bucket {
+        // Emulate more or less bucket
+        for &num_rows_per_bucket in num_rows_per_bucket() {
             group.bench_function(format!("bucketsz={num_rows_per_bucket}"), |b| {
                 b.iter(|| {
                     insert_table(
                         DataStoreConfig {
-                            index_bucket_nb_rows: num_rows_per_bucket,
-                            component_bucket_nb_rows: num_rows_per_bucket,
-                            index_bucket_size_bytes: u64::MAX,
-                            component_bucket_size_bytes: u64::MAX,
+                            indexed_bucket_num_rows: num_rows_per_bucket,
                             ..Default::default()
                         },
                         InstanceKey::name(),
@@ -68,7 +90,7 @@ fn insert(c: &mut Criterion) {
 }
 
 fn latest_at(c: &mut Criterion) {
-    for packed in [false, true] {
+    for &packed in packed() {
         let mut group = c.benchmark_group(format!(
             "datastore/num_rows={NUM_ROWS}/num_instances={NUM_INSTANCES}/packed={packed}/latest_at"
         ));
@@ -80,10 +102,11 @@ fn latest_at(c: &mut Criterion) {
         group.bench_function("default", |b| {
             let store = insert_table(Default::default(), InstanceKey::name(), &table);
             b.iter(|| {
-                let results = latest_data_at(&store, Rect2D::name(), &[Rect2D::name()]);
-                let rects = results[0]
+                let cells = latest_data_at(&store, Rect2D::name(), &[Rect2D::name()]);
+                let rects = cells[0]
                     .as_ref()
                     .unwrap()
+                    .as_arrow_ref()
                     .as_any()
                     .downcast_ref::<UnionArray>()
                     .unwrap();
@@ -92,14 +115,10 @@ fn latest_at(c: &mut Criterion) {
         });
 
         // Emulate more or less buckets
-        let num_rows_per_bucket = [0, 2, 32, 2048];
-        for num_rows_per_bucket in num_rows_per_bucket {
+        for &num_rows_per_bucket in num_rows_per_bucket() {
             let store = insert_table(
                 DataStoreConfig {
-                    index_bucket_nb_rows: num_rows_per_bucket,
-                    component_bucket_nb_rows: num_rows_per_bucket,
-                    index_bucket_size_bytes: u64::MAX,
-                    component_bucket_size_bytes: u64::MAX,
+                    indexed_bucket_num_rows: num_rows_per_bucket,
                     ..Default::default()
                 },
                 InstanceKey::name(),
@@ -107,10 +126,11 @@ fn latest_at(c: &mut Criterion) {
             );
             group.bench_function(format!("bucketsz={num_rows_per_bucket}"), |b| {
                 b.iter(|| {
-                    let results = latest_data_at(&store, Rect2D::name(), &[Rect2D::name()]);
-                    let rects = results[0]
+                    let cells = latest_data_at(&store, Rect2D::name(), &[Rect2D::name()]);
+                    let rects = cells[0]
                         .as_ref()
                         .unwrap()
+                        .as_arrow_ref()
                         .as_any()
                         .downcast_ref::<UnionArray>()
                         .unwrap();
@@ -122,7 +142,7 @@ fn latest_at(c: &mut Criterion) {
 }
 
 fn latest_at_missing(c: &mut Criterion) {
-    for packed in [false, true] {
+    for &packed in packed() {
         let mut group = c.benchmark_group(format!(
             "datastore/num_rows={NUM_ROWS}/num_instances={NUM_INSTANCES}/packed={packed}/latest_at_missing"
         ));
@@ -157,14 +177,10 @@ fn latest_at_missing(c: &mut Criterion) {
         });
 
         // Emulate more or less buckets
-        let num_rows_per_bucket = [0, 2, 32, 2048];
-        for num_rows_per_bucket in num_rows_per_bucket {
+        for &num_rows_per_bucket in num_rows_per_bucket() {
             let store = insert_table(
                 DataStoreConfig {
-                    index_bucket_nb_rows: num_rows_per_bucket,
-                    component_bucket_nb_rows: num_rows_per_bucket,
-                    index_bucket_size_bytes: u64::MAX,
-                    component_bucket_size_bytes: u64::MAX,
+                    indexed_bucket_num_rows: num_rows_per_bucket,
                     ..Default::default()
                 },
                 InstanceKey::name(),
@@ -198,7 +214,7 @@ fn latest_at_missing(c: &mut Criterion) {
 }
 
 fn range(c: &mut Criterion) {
-    for packed in [false, true] {
+    for &packed in packed() {
         let mut group = c.benchmark_group(format!(
             "datastore/num_rows={NUM_ROWS}/num_instances={NUM_INSTANCES}/packed={packed}/range"
         ));
@@ -214,14 +230,10 @@ fn range(c: &mut Criterion) {
         });
 
         // Emulate more or less buckets
-        let num_rows_per_bucket = [0, 2, 32, 2048];
-        for num_rows_per_bucket in num_rows_per_bucket {
+        for &num_rows_per_bucket in num_rows_per_bucket() {
             let store = insert_table(
                 DataStoreConfig {
-                    index_bucket_nb_rows: num_rows_per_bucket,
-                    component_bucket_nb_rows: num_rows_per_bucket,
-                    index_bucket_size_bytes: u64::MAX,
-                    component_bucket_size_bytes: u64::MAX,
+                    indexed_bucket_num_rows: num_rows_per_bucket,
                     ..Default::default()
                 },
                 InstanceKey::name(),
@@ -229,14 +241,15 @@ fn range(c: &mut Criterion) {
             );
             group.bench_function(format!("bucketsz={num_rows_per_bucket}"), |b| {
                 b.iter(|| {
-                    let msgs = range_data(&store, [Rect2D::name()]);
-                    for (cur_time, (time, results)) in msgs.enumerate() {
+                    let rows = range_data(&store, [Rect2D::name()]);
+                    for (cur_time, (time, cells)) in rows.enumerate() {
                         let time = time.unwrap();
                         assert_eq!(cur_time as i64, time.as_i64());
 
-                        let rects = results[0]
+                        let rects = cells[0]
                             .as_ref()
                             .unwrap()
+                            .as_arrow_ref()
                             .as_any()
                             .downcast_ref::<UnionArray>()
                             .unwrap();
@@ -248,14 +261,56 @@ fn range(c: &mut Criterion) {
     }
 }
 
+fn gc(c: &mut Criterion) {
+    let mut group = c.benchmark_group(format!(
+        "datastore/num_rows={NUM_ROWS}/num_instances={NUM_INSTANCES}/gc"
+    ));
+    group.throughput(criterion::Throughput::Elements(
+        (NUM_INSTANCES * NUM_ROWS) as _,
+    ));
+
+    let mut table = build_table(NUM_INSTANCES as usize, false);
+    table.compute_all_size_bytes();
+
+    // Default config
+    group.bench_function("default", |b| {
+        let store = insert_table(Default::default(), InstanceKey::name(), &table);
+        b.iter(|| {
+            let mut store = store.clone();
+            let (_, stats_diff) = store.gc(GarbageCollectionTarget::DropAtLeastFraction(1.0 / 3.0));
+            stats_diff
+        });
+    });
+
+    // Emulate more or less bucket
+    for &num_rows_per_bucket in num_rows_per_bucket() {
+        group.bench_function(format!("bucketsz={num_rows_per_bucket}"), |b| {
+            let store = insert_table(
+                DataStoreConfig {
+                    indexed_bucket_num_rows: num_rows_per_bucket,
+                    ..Default::default()
+                },
+                InstanceKey::name(),
+                &table,
+            );
+            b.iter(|| {
+                let mut store = store.clone();
+                let (_, stats_diff) =
+                    store.gc(GarbageCollectionTarget::DropAtLeastFraction(1.0 / 3.0));
+                stats_diff
+            });
+        });
+    }
+}
+
 // --- Helpers ---
 
 fn build_table(n: usize, packed: bool) -> DataTable {
     let mut table = DataTable::from_rows(
-        MsgId::ZERO,
+        TableId::ZERO,
         (0..NUM_ROWS).map(move |frame_idx| {
             DataRow::from_cells2(
-                MsgId::random(),
+                RowId::random(),
                 "rects",
                 [build_frame_nr(frame_idx.into())],
                 n as _,
@@ -267,7 +322,7 @@ fn build_table(n: usize, packed: bool) -> DataTable {
     // Do a serialization roundtrip to pack everything in contiguous memory.
     if packed {
         let (schema, columns) = table.serialize().unwrap();
-        table = DataTable::deserialize(MsgId::ZERO, &schema, &columns).unwrap();
+        table = DataTable::deserialize(TableId::ZERO, &schema, &columns).unwrap();
     }
 
     table
@@ -287,26 +342,25 @@ fn latest_data_at<const N: usize>(
     store: &DataStore,
     primary: ComponentName,
     secondaries: &[ComponentName; N],
-) -> [Option<Box<dyn Array>>; N] {
+) -> [Option<DataCell>; N] {
     let timeline_frame_nr = Timeline::new("frame_nr", TimeType::Sequence);
     let timeline_query = LatestAtQuery::new(timeline_frame_nr, (NUM_ROWS / 2).into());
     let ent_path = EntityPath::from("rects");
 
-    let row_indices = store
+    store
         .latest_at(&timeline_query, &ent_path, primary, secondaries)
-        .unwrap_or_else(|| [(); N].map(|_| None));
-    store.get(secondaries, &row_indices)
+        .map_or_else(|| [(); N].map(|_| None), |(_, cells)| cells)
 }
 
 fn range_data<const N: usize>(
     store: &DataStore,
     components: [ComponentName; N],
-) -> impl Iterator<Item = (Option<TimeInt>, [Option<Box<dyn Array>>; N])> + '_ {
+) -> impl Iterator<Item = (Option<TimeInt>, [Option<DataCell>; N])> + '_ {
     let timeline_frame_nr = Timeline::new("frame_nr", TimeType::Sequence);
     let query = RangeQuery::new(timeline_frame_nr, TimeRange::new(0.into(), NUM_ROWS.into()));
     let ent_path = EntityPath::from("rects");
 
     store
         .range(&query, &ent_path, components)
-        .map(move |(time, _, row_indices)| (time, store.get(&components, &row_indices)))
+        .map(move |(time, _, cells)| (time, cells))
 }

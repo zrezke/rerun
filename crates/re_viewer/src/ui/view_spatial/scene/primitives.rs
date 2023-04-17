@@ -1,5 +1,6 @@
 use egui::Color32;
 use re_data_store::InstancePathHash;
+use re_log_types::EntityPathHash;
 use re_renderer::{
     renderer::{DepthClouds, MeshInstance},
     LineStripSeriesBuilder, PointCloudBuilder,
@@ -12,7 +13,7 @@ use super::MeshSource;
 /// Primitives sent off to `re_renderer`.
 /// (Some meta information still relevant to ui setup as well)
 ///
-/// TODO(andreas): Right now we're using `re_renderer` data structures for reading (bounding box & picking).
+/// TODO(andreas): Right now we're using `re_renderer` data structures for reading (bounding box).
 ///                 In the future, this will be more limited as we're going to gpu staging data as soon as possible
 ///                 which is very slow to read. See [#594](https://github.com/rerun-io/rerun/pull/594)
 pub struct SceneSpatialPrimitives {
@@ -21,11 +22,11 @@ pub struct SceneSpatialPrimitives {
 
     // TODO(andreas): Storing extra data like so is unsafe and not future proof either
     //                (see also above comment on the need to separate cpu-readable data)
-    pub textured_rectangles_ids: Vec<InstancePathHash>,
+    pub textured_rectangles_ids: Vec<EntityPathHash>,
     pub textured_rectangles: Vec<re_renderer::renderer::TexturedRect>,
 
-    pub line_strips: LineStripSeriesBuilder<InstancePathHash>,
-    pub points: PointCloudBuilder<InstancePathHash>,
+    pub line_strips: LineStripSeriesBuilder,
+    pub points: PointCloudBuilder,
     pub meshes: Vec<MeshSource>,
     pub depth_clouds: DepthClouds,
 
@@ -93,7 +94,7 @@ impl SceneSpatialPrimitives {
             line_strips,
             points,
             meshes,
-            depth_clouds: _, // no bbox for depth clouds
+            depth_clouds,
             any_outlines: _,
         } = self;
 
@@ -132,6 +133,10 @@ impl SceneSpatialPrimitives {
             // TODO(jleibs): is this safe for meshes or should we be doing the equivalent of the above?
             *bounding_box =
                 bounding_box.union(mesh.mesh.bbox().transform_affine3(&mesh.world_from_mesh));
+        }
+
+        for cloud in &depth_clouds.clouds {
+            *bounding_box = bounding_box.union(cloud.bbox());
         }
     }
 
@@ -173,7 +178,13 @@ impl SceneSpatialPrimitives {
         let line_radius = re_renderer::Size::new_scene(axis_length * 0.05);
         let origin = transform.translation();
 
-        let mut line_batch = self.line_strips.batch("origin axis");
+        let picking_layer_id = picking_layer_id_from_instance_path_hash(instance_path_hash);
+
+        let mut line_batch = self
+            .line_strips
+            .batch("origin axis")
+            .picking_object_id(picking_layer_id.object);
+
         line_batch
             .add_segment(
                 origin,
@@ -182,7 +193,7 @@ impl SceneSpatialPrimitives {
             .radius(line_radius)
             .color(AXIS_COLOR_X)
             .flags(LineStripFlags::CAP_END_TRIANGLE | LineStripFlags::CAP_START_ROUND)
-            .user_data(instance_path_hash);
+            .picking_instance_id(picking_layer_id.instance);
         line_batch
             .add_segment(
                 origin,
@@ -191,7 +202,7 @@ impl SceneSpatialPrimitives {
             .radius(line_radius)
             .color(AXIS_COLOR_Y)
             .flags(LineStripFlags::CAP_END_TRIANGLE | LineStripFlags::CAP_START_ROUND)
-            .user_data(instance_path_hash);
+            .picking_instance_id(picking_layer_id.instance);
         line_batch
             .add_segment(
                 origin,
@@ -200,6 +211,6 @@ impl SceneSpatialPrimitives {
             .radius(line_radius)
             .color(AXIS_COLOR_Z)
             .flags(LineStripFlags::CAP_END_TRIANGLE | LineStripFlags::CAP_START_ROUND)
-            .user_data(instance_path_hash);
+            .picking_instance_id(picking_layer_id.instance);
     }
 }

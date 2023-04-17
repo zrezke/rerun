@@ -158,7 +158,8 @@ async fn run_client(
         let msg = crate::decode_log_msg(&packet)?;
 
         if matches!(msg, LogMsg::Goodbye(_)) {
-            re_log::debug!("Client sent goodbye message.");
+            re_log::debug!("Received goodbye message.");
+            tx.send(msg)?;
             return Ok(());
         }
 
@@ -209,9 +210,11 @@ impl CongestionManager {
         #[allow(clippy::match_same_arms)]
         match msg {
             // we don't want to drop any of these
-            LogMsg::BeginRecordingMsg(_) | LogMsg::EntityPathOpMsg(_) | LogMsg::Goodbye(_) => true,
+            LogMsg::BeginRecordingMsg(_) | LogMsg::EntityPathOpMsg(_, _) | LogMsg::Goodbye(_) => {
+                true
+            }
 
-            LogMsg::ArrowMsg(arrow_msg) => self.should_send_time_point(&arrow_msg.timepoint_max),
+            LogMsg::ArrowMsg(_, arrow_msg) => self.should_send_time_point(&arrow_msg.timepoint_max),
         }
     }
 

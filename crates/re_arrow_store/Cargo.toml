@@ -25,6 +25,10 @@ deadlock_detection = ["parking_lot/deadlock_detection"]
 ## Integration with `polars`, to efficiently use the datastore with dataframes.
 polars = ["dep:polars-core", "dep:polars-ops"]
 
+## When set, only run the core set of benchmark suites.
+## Commonly set implicitly by --all-features, e.g. on CI.
+core_benchmarks_only = []
+
 
 [dependencies]
 # Rerun dependencies:
@@ -34,17 +38,14 @@ re_log.workspace = true
 
 # External dependencies:
 ahash.workspace = true
-anyhow.workspace = true
-arrow2 = { workspace = true, features = [
-  "compute_concatenate",
-  "compute_aggregate",
-] }
+arrow2 = { workspace = true, features = ["compute_concatenate"] }
+arrow2_convert.workspace = true
 document-features = "0.2"
 indent = "0.1"
 itertools = { workspace = true }
 nohash-hasher = "0.2"
 parking_lot.workspace = true
-static_assertions = "1.1"
+smallvec.workspace = true
 thiserror.workspace = true
 
 # Native dependencies:
@@ -69,6 +70,7 @@ polars-ops = { workspace = true, optional = true, features = [
 
 
 [dev-dependencies]
+anyhow.workspace = true
 criterion = "0.4"
 mimalloc.workspace = true
 polars-core = { workspace = true, features = [
@@ -81,7 +83,7 @@ polars-core = { workspace = true, features = [
   "sort_multiple",
 ] }
 rand = "0.8"
-
+tinyvec.workspace = true
 
 [lib]
 bench = false
@@ -110,4 +112,16 @@ required-features = ["polars"]
 
 [[bench]]
 name = "data_store"
+harness = false
+
+[[bench]]
+name = "arrow2"
+harness = false
+
+[[bench]]
+name = "arrow2_convert"
+harness = false
+
+[[bench]]
+name = "vectors"
 harness = false

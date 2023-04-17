@@ -48,7 +48,7 @@ fn live_bytes() -> usize {
 
 // ----------------------------------------------------------------------------
 
-use re_log_types::{entity_path, DataRow, MsgId};
+use re_log_types::{entity_path, DataRow, RecordingId, RowId};
 
 fn main() {
     log_messages();
@@ -57,7 +57,7 @@ fn main() {
 fn log_messages() {
     use re_log_types::{
         datagen::{build_frame_nr, build_some_point2d},
-        ArrowMsg, LogMsg, TimeInt, TimePoint, Timeline,
+        LogMsg, TimeInt, TimePoint, Timeline,
     };
 
     // Note: we use Box in this function so that we also count the "static"
@@ -65,12 +65,12 @@ fn log_messages() {
 
     fn encode_log_msg(log_msg: &LogMsg) -> Vec<u8> {
         let mut bytes = vec![];
-        re_log_types::encoding::encode(std::iter::once(log_msg), &mut bytes).unwrap();
+        re_log_encoding::encoder::encode(std::iter::once(log_msg), &mut bytes).unwrap();
         bytes
     }
 
     fn decode_log_msg(mut bytes: &[u8]) -> LogMsg {
-        let mut messages = re_log_types::encoding::Decoder::new(&mut bytes)
+        let mut messages = re_log_encoding::decoder::Decoder::new(&mut bytes)
             .unwrap()
             .collect::<Result<Vec<LogMsg>, _>>()
             .unwrap();
@@ -91,6 +91,7 @@ fn log_messages() {
 
     const NUM_POINTS: usize = 1_000;
 
+    let recording_id = RecordingId::random();
     let timeline = Timeline::new_sequence("frame_nr");
     let mut time_point = TimePoint::default();
     time_point.insert(timeline, TimeInt::from(0));
@@ -107,7 +108,7 @@ fn log_messages() {
         let used_bytes_start = live_bytes();
         let table = Box::new(
             DataRow::from_cells1(
-                MsgId::random(),
+                RowId::random(),
                 entity_path!("points"),
                 [build_frame_nr(0.into())],
                 1,
@@ -116,7 +117,10 @@ fn log_messages() {
             .into_table(),
         );
         let table_bytes = live_bytes() - used_bytes_start;
-        let log_msg = Box::new(LogMsg::ArrowMsg(ArrowMsg::try_from(&*table).unwrap()));
+        let log_msg = Box::new(LogMsg::ArrowMsg(
+            recording_id,
+            table.to_arrow_msg().unwrap(),
+        ));
         let log_msg_bytes = live_bytes() - used_bytes_start;
         println!("Arrow payload containing a Pos2 uses {table_bytes} bytes in RAM");
         let encoded = encode_log_msg(&log_msg);
@@ -130,7 +134,7 @@ fn log_messages() {
         let used_bytes_start = live_bytes();
         let table = Box::new(
             DataRow::from_cells1(
-                MsgId::random(),
+                RowId::random(),
                 entity_path!("points"),
                 [build_frame_nr(0.into())],
                 NUM_POINTS as _,
@@ -139,7 +143,10 @@ fn log_messages() {
             .into_table(),
         );
         let table_bytes = live_bytes() - used_bytes_start;
-        let log_msg = Box::new(LogMsg::ArrowMsg(ArrowMsg::try_from(&*table).unwrap()));
+        let log_msg = Box::new(LogMsg::ArrowMsg(
+            recording_id,
+            table.to_arrow_msg().unwrap(),
+        ));
         let log_msg_bytes = live_bytes() - used_bytes_start;
         println!("Arrow payload containing a Pos2 uses {table_bytes} bytes in RAM");
         let encoded = encode_log_msg(&log_msg);

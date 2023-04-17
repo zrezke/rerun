@@ -9,9 +9,6 @@
 // ----------------
 // Private modules:
 
-#[cfg(not(target_arch = "wasm32"))]
-mod file_sink;
-
 #[cfg(feature = "global_session")]
 mod global;
 
@@ -34,6 +31,13 @@ pub use re_log_types::{
     ApplicationId, Component, ComponentName, EntityPath, RecordingId, SerializableComponent,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+impl crate::sink::LogSink for re_log_encoding::FileSink {
+    fn send(&self, msg: re_log_types::LogMsg) {
+        re_log_encoding::FileSink::send(self, msg);
+    }
+}
+
 // ---------------
 // Public modules:
 
@@ -45,15 +49,17 @@ pub mod demo_util;
 /// This is how you select whether the log stream ends up
 /// sent over TCP, written to file, etc.
 pub mod sink {
-    pub use crate::log_sink::{disabled, BufferedSink, LogSink, TcpSink};
+    pub use crate::log_sink::{
+        disabled, BufferedSink, LogSink, MemorySink, MemorySinkStorage, TcpSink,
+    };
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub use crate::file_sink::{FileSink, FileSinkError};
+    pub use re_log_encoding::{FileSink, FileSinkError};
 }
 
 /// Things directly related to logging.
 pub mod log {
-    pub use re_log_types::{DataCell, DataRow, DataTable, LogMsg, MsgId, PathOp};
+    pub use re_log_types::{DataCell, DataRow, DataTable, LogMsg, PathOp, RowId, TableId};
 }
 
 /// Time-related types.
@@ -71,8 +77,7 @@ pub mod components {
         EncodedMesh3D, InstanceKey, KeypointId, Label, LineStrip2D, LineStrip3D, Mat3x3, Mesh3D,
         MeshFormat, MeshId, Pinhole, Point2D, Point3D, Quaternion, Radius, RawMesh3D, Rect2D,
         Rigid3, Scalar, ScalarPlotProps, Size3D, Tensor, TensorData, TensorDataMeaning,
-        TensorDimension, TensorId, TensorTrait, TextEntry, Transform, Vec2D, Vec3D, Vec4D,
-        ViewCoordinates,
+        TensorDimension, TensorId, TextEntry, Transform, Vec2D, Vec3D, Vec4D, ViewCoordinates,
     };
 }
 
