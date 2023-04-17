@@ -11,7 +11,7 @@ use re_data_store::{
 };
 use re_log_types::{
     component_types::{ImuData, InstanceKey, Tensor, TensorDataMeaning},
-    Component, MsgId, TimeType, Transform,
+    Component, TimeType, Transform,
 };
 use re_query::{query_primary_with_history, QueryError};
 
@@ -24,7 +24,7 @@ use crate::{
 
 use egui_dock::{DockArea, NodeIndex, Tree};
 
-use super::{data_ui::DataUi, plot_3d, space_view::ViewState, SpaceView, ViewCategory};
+use super::{data_ui::DataUi, space_view::ViewState, SpaceView, ViewCategory};
 
 use egui::emath::History;
 

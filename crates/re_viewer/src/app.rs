@@ -936,15 +936,6 @@ enum PanelSelection {
     Viewport,
 }
 
-impl fmt::Display for PanelSelection {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PanelSelection::Viewport => write!(f, "Viewport"),
-            PanelSelection::EventLog => write!(f, "Event log"),
-        }
-    }
-}
-
 #[derive(Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct AppState {

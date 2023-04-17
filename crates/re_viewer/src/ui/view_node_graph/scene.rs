@@ -2,7 +2,7 @@ use re_arrow_store::TimeRange;
 use re_data_store::EntityPath;
 use re_log_types::{
     component_types::{self, InstanceKey},
-    Component, MsgId,
+    Component,
 };
 use re_query::{range_entity_with_primary, QueryError};
 
@@ -12,9 +12,6 @@ use crate::{ui::SceneQuery, ViewerContext};
 
 #[derive(Debug, Clone)]
 pub struct NodeGraphEntry {
-    // props
-    pub msg_id: MsgId,
-
     pub entity_path: EntityPath,
 
     /// `None` for timeless data.
