@@ -56,6 +56,8 @@ tokio = { workspace = true, default-features = false, features = [
   "rt"
 ] }
 ewebsock = { version = "0.2", optional = false }
+strum = { version = "0.24", features = ["derive"] }
+strum_macros = "0.24"
 
 # Internal (optional):
 re_analytics = { workspace = true, optional = true }

@@ -12,17 +12,32 @@ use instant::Instant;
 use std::fmt;
 use std::sync::mpsc::channel;
 
-#[derive(serde::Deserialize, serde::Serialize, fmt::Debug, PartialEq, Clone, Copy)]
+use strum::EnumIter;
+
+#[derive(serde::Deserialize, serde::Serialize, fmt::Debug, PartialEq, Clone, Copy, EnumIter)]
 #[allow(non_camel_case_types)]
 pub enum ColorCameraResolution {
+    THE_720_P,
+    THE_800_P,
+    THE_1440X1080,
     THE_1080_P,
+    THE_1200_P,
+    THE_5_MP,
     THE_4_K,
+    THE_12_MP,
+    THE_4000X3000,
+    THE_13_MP,
+    THE_48_MP,
 }
 
-#[derive(serde::Deserialize, serde::Serialize, fmt::Debug, PartialEq, Clone, Copy)]
+#[derive(serde::Deserialize, serde::Serialize, fmt::Debug, PartialEq, Clone, Copy, EnumIter)]
 #[allow(non_camel_case_types)]
 pub enum MonoCameraResolution {
     THE_400_P,
+    THE_480_P,
+    THE_720_P,
+    THE_800_P,
+    THE_1200_P,
 }
 
 // fmt::Display is used in UI while fmt::Debug is used with the depthai backend api
@@ -31,6 +46,15 @@ impl fmt::Display for ColorCameraResolution {
         match self {
             Self::THE_1080_P => write!(f, "1080p"),
             Self::THE_4_K => write!(f, "4k"),
+            Self::THE_720_P => write!(f, "720p"),
+            Self::THE_800_P => write!(f, "800p"),
+            Self::THE_1200_P => write!(f, "1200p"),
+            Self::THE_5_MP => write!(f, "5MP"),
+            Self::THE_12_MP => write!(f, "12MP"),
+            Self::THE_13_MP => write!(f, "13MP"),
+            Self::THE_4000X3000 => write!(f, "4000x3000"),
+            Self::THE_48_MP => write!(f, "48MP"),
+            Self::THE_1440X1080 => write!(f, "1440x1080"),
         }
     }
 }
@@ -39,6 +63,10 @@ impl fmt::Display for MonoCameraResolution {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::THE_400_P => write!(f, "400p"),
+            Self::THE_480_P => write!(f, "480p"),
+            Self::THE_720_P => write!(f, "720p"),
+            Self::THE_800_P => write!(f, "800p"),
+            Self::THE_1200_P => write!(f, "1200p"),
         }
     }
 }
@@ -97,7 +125,7 @@ impl Default for MonoCameraConfig {
     fn default() -> Self {
         Self {
             fps: 30,
-            resolution: MonoCameraResolution::THE_400_P,
+            resolution: MonoCameraResolution::THE_800_P,
             board_socket: BoardSocket::AUTO,
         }
     }
@@ -150,11 +178,32 @@ impl Default for DepthMedianFilter {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, Default, fmt::Debug)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, fmt::Debug)]
 pub struct DepthConfig {
     // TODO:(filip) add a legit depth config, when sdk is more defined
     pub median: DepthMedianFilter,
     pub pointcloud: PointcloudConfig,
+    pub lr_check: bool,
+    pub lrc_threshold: u64,
+    pub extended_disparity: bool,
+    pub subpixel_disparity: bool,
+    pub sigma: i64,
+    pub confidence: i64,
+}
+
+impl Default for DepthConfig {
+    fn default() -> Self {
+        Self {
+            median: DepthMedianFilter::default(),
+            pointcloud: PointcloudConfig::default(),
+            lr_check: true,
+            lrc_threshold: 5,
+            extended_disparity: false,
+            subpixel_disparity: true,
+            sigma: 0,
+            confidence: 230,
+        }
+    }
 }
 
 impl DepthConfig {
@@ -236,15 +285,12 @@ impl Default for Error {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, PartialEq, fmt::Debug)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, PartialEq, fmt::Debug, Default)]
 pub struct Device {
     pub id: DeviceId,
-    // Add more fields later
-}
-impl Default for Device {
-    fn default() -> Self {
-        Self { id: "".to_string() }
-    }
+    pub supported_color_resolutions: Vec<ColorCameraResolution>,
+    pub supported_left_mono_resolutions: Vec<MonoCameraResolution>,
+    pub supported_right_mono_resolutions: Vec<MonoCameraResolution>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, PartialEq, fmt::Debug)]
@@ -510,7 +556,7 @@ impl State {
                     self.device_config.update_in_progress = false;
                 }
                 WsMessageData::Device(device) => {
-                    re_log::debug!("Setting device");
+                    re_log::debug!("Setting device: {device:?}");
                     self.selected_device = device;
                     self.backend_comms.set_subscriptions(&self.subscriptions);
                     self.backend_comms.set_pipeline(&self.device_config.config);
@@ -564,10 +610,13 @@ impl State {
         config.left_camera.board_socket = BoardSocket::LEFT;
         config.right_camera.board_socket = BoardSocket::RIGHT;
         self.device_config.config = config.clone();
-        self.backend_comms.set_pipeline(&self.device_config.config);
+        if !config.depth_enabled {
+            config.depth = None;
+        }
+        self.backend_comms.set_pipeline(&config);
         re_log::info!("Creating pipeline...");
         self.device_config.update_in_progress = true;
     }
 }
 
-pub type DeviceId = String; // i64 because of serialization
+pub type DeviceId = String;

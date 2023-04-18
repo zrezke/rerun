@@ -6,7 +6,7 @@ use itertools::Itertools;
 use poll_promise::Promise;
 use re_arrow_store::{LatestAtQuery, RangeQuery, TimeInt, TimeRange, Timeline};
 use re_data_store::{
-    query_latest_single, Colormap, ColorMapper, EditableAutoValue, EntityPath, EntityProperties,
+    query_latest_single, ColorMapper, Colormap, EditableAutoValue, EntityPath, EntityProperties,
     ExtraQueryHistory,
 };
 use re_log_types::{
@@ -27,6 +27,7 @@ use egui_dock::{DockArea, NodeIndex, Tree};
 use super::{data_ui::DataUi, space_view::ViewState, SpaceView, ViewCategory};
 
 use egui::emath::History;
+use strum::IntoEnumIterator; // Needed for enum::iter()
 
 // ---
 
@@ -104,7 +105,6 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
     fn device_configuration_ui(&mut self, ui: &mut egui::Ui) {
         // re_log::info!("pipeline_state: {:?}", pipeline_state);
         let mut device_config = self.ctx.depthai_state.device_config.config.clone();
-        let mut depth_enabled = device_config.depth.is_some();
         let mut depth = device_config.depth.unwrap_or_default();
         let mut update_device_config = false;
         ui.add_enabled_ui(self.ctx.depthai_state.selected_device.id != "", |ui| {
@@ -114,28 +114,26 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                         ui.horizontal(|ui| {
                             ui.label("Resolution: ");
                             egui::ComboBox::from_id_source("color_camera_resolution")
-                                .width(70.0)
                                 .selected_text(format!("{}", device_config.color_camera.resolution))
+                                .width(100.0)
                                 .show_ui(ui, |ui| {
-                                    if ui
-                                        .selectable_value(
-                                            &mut device_config.color_camera.resolution,
-                                            depthai::ColorCameraResolution::THE_1080_P,
-                                            "1080p",
-                                        )
-                                        .changed()
+                                    for res in self
+                                        .ctx
+                                        .depthai_state
+                                        .selected_device
+                                        .supported_color_resolutions
+                                        .iter()
                                     {
-                                        update_device_config = true;
-                                    }
-                                    if ui
-                                        .selectable_value(
-                                            &mut device_config.color_camera.resolution,
-                                            depthai::ColorCameraResolution::THE_4_K,
-                                            "4k",
-                                        )
-                                        .changed()
-                                    {
-                                        update_device_config = true;
+                                        if ui
+                                            .selectable_value(
+                                                &mut device_config.color_camera.resolution,
+                                                *res,
+                                                format!("{res}"),
+                                            )
+                                            .changed()
+                                        {
+                                            update_device_config = true;
+                                        }
                                     }
                                 });
                         });
@@ -158,15 +156,23 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                                 .width(70.0)
                                 .selected_text(format!("{}", device_config.left_camera.resolution))
                                 .show_ui(ui, |ui| {
-                                    if ui
-                                        .selectable_value(
-                                            &mut device_config.left_camera.resolution,
-                                            depthai::MonoCameraResolution::THE_400_P,
-                                            "400p",
-                                        )
-                                        .changed()
+                                    for res in self
+                                        .ctx
+                                        .depthai_state
+                                        .selected_device
+                                        .supported_left_mono_resolutions
+                                        .iter()
                                     {
-                                        update_device_config = true;
+                                        if ui
+                                            .selectable_value(
+                                                &mut device_config.left_camera.resolution,
+                                                *res,
+                                                format!("{res}"),
+                                            )
+                                            .changed()
+                                        {
+                                            update_device_config = true;
+                                        }
                                     }
                                 });
                         });
@@ -189,15 +195,23 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                                 .width(70.0)
                                 .selected_text(format!("{}", device_config.right_camera.resolution))
                                 .show_ui(ui, |ui| {
-                                    if ui
-                                        .selectable_value(
-                                            &mut device_config.right_camera.resolution,
-                                            depthai::MonoCameraResolution::THE_400_P,
-                                            "400p",
-                                        )
-                                        .changed()
+                                    for res in self
+                                        .ctx
+                                        .depthai_state
+                                        .selected_device
+                                        .supported_right_mono_resolutions
+                                        .iter()
                                     {
-                                        update_device_config = true;
+                                        if ui
+                                            .selectable_value(
+                                                &mut device_config.right_camera.resolution,
+                                                *res,
+                                                format!("{res}"),
+                                            )
+                                            .changed()
+                                        {
+                                            update_device_config = true;
+                                        }
                                     }
                                 });
                         });
@@ -212,34 +226,84 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                         });
                     });
                 });
-                ui.checkbox(
-                    &mut self.ctx.depthai_state.device_config.config.depth_enabled,
-                    "Depth",
-                );
-                if self.ctx.depthai_state.device_config.config.depth_enabled {
-                    ui.collapsing("Depth", |ui| {
-                        ui.vertical(|ui| {
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .checkbox(&mut depth.pointcloud.enabled, "Point Cloud")
-                                    .changed()
-                                {
-                                    update_device_config = true;
-                                    device_config.depth = Some(depth);
-                                }
-                            });
+                if ui
+                    .checkbox(&mut device_config.depth_enabled, "Depth")
+                    .changed()
+                {
+                    update_device_config = true;
+                }
+                let mut depth_updated = false;
+                ui.collapsing("Depth settings", |ui| {
+                    ui.vertical(|ui| {
+                        if ui.checkbox(&mut depth.lr_check, "LR Check").changed() {
+                            depth_updated = true;
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("LR Threshold: ");
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut depth.lrc_threshold)
+                                        .clamp_range(0..=10),
+                                )
+                                .changed()
+                            {
+                                depth_updated = true;
+                            }
+                        });
+
+                        if ui
+                            .checkbox(&mut depth.extended_disparity, "Extended Disparity")
+                            .changed()
+                        {
+                            depth_updated = true;
+                        }
+                        if ui
+                            .checkbox(&mut depth.subpixel_disparity, "Subpixel Disparity")
+                            .changed()
+                        {
+                            depth_updated = true;
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("Sigma: ");
+                            if ui
+                                .add(egui::DragValue::new(&mut depth.sigma).clamp_range(0..=65535))
+                                .changed()
+                            {
+                                depth_updated = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Confidence: ");
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut depth.confidence)
+                                        .clamp_range(0..=255),
+                                )
+                                .changed()
+                            {
+                                depth_updated = true;
+                            }
                         });
                     });
-                    if device_config.depth.is_none() {
-                        device_config.depth = Some(depth);
-                        update_device_config = true;
+                    if depth_updated {
+                        if device_config.depth_enabled {
+                            update_device_config = true;
+                        } else {
+                            self.ctx.depthai_state.device_config.config.depth = Some(depth);
+                        }
                     }
-                } else {
-                    if device_config.depth.is_some() {
-                        device_config.depth = None;
-                        update_device_config = true;
-                    }
-                }
+                    ui.horizontal(|ui| {
+                        if ui
+                            .checkbox(&mut depth.pointcloud.enabled, "Point Cloud")
+                            .changed()
+                        {
+                            if device_config.depth_enabled {
+                                update_device_config = true;
+                            }
+                        }
+                    });
+                });
+
                 ui.vertical(|ui| {
                     ui.label("AI Model:");
                     egui::ComboBox::from_id_source("ai_model_selection")
@@ -262,6 +326,7 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                 });
             });
             if update_device_config {
+                device_config.depth = Some(depth);
                 self.ctx.depthai_state.set_device_config(&mut device_config);
             }
         });
