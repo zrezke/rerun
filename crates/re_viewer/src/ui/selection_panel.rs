@@ -239,6 +239,47 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                             depth_updated = true;
                         }
                         ui.horizontal(|ui| {
+                            ui.label("Align to: ");
+                            egui::ComboBox::from_id_source("depth_align_combo")
+                                .width(100.0)
+                                .selected_text(format!("{:?}", depth.align))
+                                .show_ui(ui, |ui| {
+                                    for align in depthai::BoardSocket::iter() {
+                                        if ui
+                                            .selectable_value(
+                                                &mut depth.align,
+                                                align,
+                                                format!("{:?}", align),
+                                            )
+                                            .changed()
+                                        {
+                                            depth_updated = true;
+                                        }
+                                    }
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Median Filter: ");
+                            egui::ComboBox::from_id_source("median_filter_combo")
+                                .width(100.0)
+                                .selected_text(format!("{:?}", depth.median))
+                                .show_ui(ui, |ui| {
+                                    for filter in depthai::DepthMedianFilter::iter() {
+                                        if ui
+                                            .selectable_value(
+                                                &mut depth.median,
+                                                filter,
+                                                format!("{:?}", filter),
+                                            )
+                                            .changed()
+                                        {
+                                            depth_updated = true;
+                                        }
+                                    }
+                                });
+                        });
+
+                        ui.horizontal(|ui| {
                             ui.label("LR Threshold: ");
                             if ui
                                 .add(

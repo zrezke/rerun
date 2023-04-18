@@ -96,7 +96,7 @@ impl fmt::Debug for ColorCameraConfig {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, EnumIter, Debug)]
 #[allow(non_camel_case_types)]
 pub enum BoardSocket {
     AUTO,
@@ -112,6 +112,12 @@ pub enum BoardSocket {
     CAM_F,
     CAM_G,
     CAM_H,
+}
+
+impl Default for BoardSocket {
+    fn default() -> Self {
+        Self::AUTO
+    }
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
@@ -163,7 +169,7 @@ impl fmt::Display for DepthProfilePreset {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, fmt::Debug)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, Debug, EnumIter)]
 #[allow(non_camel_case_types)]
 pub enum DepthMedianFilter {
     MEDIAN_OFF,
@@ -178,9 +184,8 @@ impl Default for DepthMedianFilter {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, fmt::Debug)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, Debug)]
 pub struct DepthConfig {
-    // TODO:(filip) add a legit depth config, when sdk is more defined
     pub median: DepthMedianFilter,
     pub pointcloud: PointcloudConfig,
     pub lr_check: bool,
@@ -189,6 +194,7 @@ pub struct DepthConfig {
     pub subpixel_disparity: bool,
     pub sigma: i64,
     pub confidence: i64,
+    pub align: BoardSocket,
 }
 
 impl Default for DepthConfig {
@@ -202,6 +208,7 @@ impl Default for DepthConfig {
             subpixel_disparity: true,
             sigma: 0,
             confidence: 230,
+            align: BoardSocket::RGB
         }
     }
 }
