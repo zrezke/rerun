@@ -306,6 +306,7 @@ def ensure_recording_available(video_id: str, include_highres: bool) -> Path:
     Returns the path to the recording for a given video_id.
 
     Args:
+    ----
         video_id (str): Identifier for the recording.
 
     Returns

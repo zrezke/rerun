@@ -263,6 +263,7 @@ def read_camera_from_world(traj_string: str) -> Tuple[str, Tuple[npt.NDArray[np.
     Reads out camera_from_world transform from trajectory string.
 
     Args:
+    ----
         traj_string: A space-delimited file where each line represents a camera position at a particular timestamp.
             The file has seven columns:
             * Column 1: timestamp
@@ -309,6 +310,7 @@ def log_arkit(recording_path: Path, include_highres: bool) -> None:
     Logs ARKit recording data using Rerun.
 
     Args:
+    ----
         recording_path (Path): The path to the ARKit recording.
 
     Returns

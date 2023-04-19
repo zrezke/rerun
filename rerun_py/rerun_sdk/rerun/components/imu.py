@@ -1,3 +1,5 @@
+from typing import Union
+
 import numpy as np
 import numpy.typing as npt
 import pyarrow as pa
@@ -5,8 +7,6 @@ import pyarrow as pa
 from rerun.components import REGISTERED_COMPONENT_NAMES, ComponentTypeFactory
 from rerun.components.point import Point3DArray, Point3DType
 from rerun.components.quaternion import QuaternionArray
-
-from typing import Union
 
 __all__ = ["ImuType", "Imu"]
 
