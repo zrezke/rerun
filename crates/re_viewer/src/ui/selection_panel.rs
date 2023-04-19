@@ -146,6 +146,12 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                                 update_device_config = true;
                             }
                         });
+                        if ui
+                            .checkbox(&mut device_config.color_camera.stream_enabled, "Stream")
+                            .changed()
+                        {
+                            update_device_config = true;
+                        }
                     });
                 });
                 ui.collapsing("Left Mono Camera", |ui| {
@@ -185,6 +191,12 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                                 update_device_config = true;
                             }
                         });
+                        if ui
+                            .checkbox(&mut device_config.left_camera.stream_enabled, "Stream")
+                            .changed()
+                        {
+                            update_device_config = true;
+                        }
                     });
                 });
                 ui.collapsing("Right Mono Camera", |ui| {
@@ -224,6 +236,12 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                                 update_device_config = true;
                             }
                         });
+                        if ui
+                            .checkbox(&mut device_config.right_camera.stream_enabled, "Stream")
+                            .changed()
+                        {
+                            update_device_config = true;
+                        }
                     });
                 });
                 if ui

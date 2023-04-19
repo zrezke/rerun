@@ -75,6 +75,8 @@ impl fmt::Display for MonoCameraResolution {
 pub struct ColorCameraConfig {
     pub fps: u8,
     pub resolution: ColorCameraResolution,
+    #[serde(rename = "xout_video")]
+    pub stream_enabled: bool,
 }
 
 impl Default for ColorCameraConfig {
@@ -82,6 +84,7 @@ impl Default for ColorCameraConfig {
         Self {
             fps: 30,
             resolution: ColorCameraResolution::THE_1080_P,
+            stream_enabled: true,
         }
     }
 }
@@ -125,6 +128,8 @@ pub struct MonoCameraConfig {
     pub fps: u8,
     pub resolution: MonoCameraResolution,
     pub board_socket: BoardSocket,
+    #[serde(rename = "xout")]
+    pub stream_enabled: bool,
 }
 
 impl Default for MonoCameraConfig {
@@ -133,6 +138,7 @@ impl Default for MonoCameraConfig {
             fps: 30,
             resolution: MonoCameraResolution::THE_800_P,
             board_socket: BoardSocket::AUTO,
+            stream_enabled: false,
         }
     }
 }
@@ -208,7 +214,7 @@ impl Default for DepthConfig {
             subpixel_disparity: true,
             sigma: 0,
             confidence: 230,
-            align: BoardSocket::RGB
+            align: BoardSocket::RGB,
         }
     }
 }
@@ -468,21 +474,26 @@ impl State {
             }
         }
 
-        // First add subscriptions that are always possible in terms of ui (no enable/disable buttons for these)
-        let mut possible_subscriptions = Vec::<ChannelId>::from([
-            ChannelId::ColorImage,
-            ChannelId::LeftMono,
-            ChannelId::RightMono,
-            ChannelId::ImuData,
-        ]);
-        // Now add non default subscriptions
-        if self.device_config.config.depth.is_some() {
+        // First add subscriptions that don't have explicit enable disable buttons in the ui
+        let mut possible_subscriptions = Vec::<ChannelId>::from([ChannelId::ImuData]);
+        // Now add subscriptions that should be possible in terms of ui
+        if self.device_config.config.depth_enabled {
             possible_subscriptions.push(ChannelId::DepthImage);
             if let Some(depth) = self.device_config.config.depth {
                 if depth.pointcloud.enabled {
                     possible_subscriptions.push(ChannelId::PointCloud);
                 }
             }
+        }
+        if self.device_config.config.color_camera.stream_enabled {
+            possible_subscriptions.push(ChannelId::ColorImage);
+        }
+
+        if self.device_config.config.left_camera.stream_enabled {
+            possible_subscriptions.push(ChannelId::LeftMono);
+        }
+        if self.device_config.config.right_camera.stream_enabled {
+            possible_subscriptions.push(ChannelId::RightMono);
         }
 
         // Filter visibilities, include those that are currently visible and also possible (example pointcloud enabled == pointcloud possible)
