@@ -41,7 +41,7 @@ impl ViewCategory {
             ViewCategory::BarChart => &re_ui::icons::SPACE_VIEW_HISTOGRAM,
             ViewCategory::Spatial => &re_ui::icons::SPACE_VIEW_3D,
             ViewCategory::Tensor => &re_ui::icons::SPACE_VIEW_TENSOR,
-            ViewCategory::NodeGraph => &re_ui::icons::SPACE_VIEW_TENSOR, // TODO: add icon
+            ViewCategory::NodeGraph => &re_ui::icons::SPACE_VIEW_TENSOR, // TODO(filip): add icon
         }
     }
 }

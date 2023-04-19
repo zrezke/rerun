@@ -26,6 +26,7 @@ impl BackendCommChannel {
     pub fn shutdown(&mut self) {
         self.ws.shutdown();
     }
+
     pub fn set_subscriptions(&mut self, subscriptions: &Vec<depthai::ChannelId>) {
         self.ws.send(
             serde_json::to_string(&WsMessage {
@@ -59,6 +60,7 @@ impl BackendCommChannel {
             .unwrap(),
         );
     }
+
     pub fn set_device(&mut self, device_id: depthai::DeviceId) {
         self.ws.send(
             serde_json::to_string(&WsMessage {
