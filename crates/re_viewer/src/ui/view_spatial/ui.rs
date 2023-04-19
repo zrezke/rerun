@@ -756,26 +756,35 @@ pub fn picking(
         let picked_image_with_coords = if hit.hit_type == PickingHitType::TexturedRect
             || *ent_properties.backproject_depth.get()
         {
-            // We don't support selecting pixels yet.
-            instance_path.instance_key = re_log_types::component_types::InstanceKey::SPLAT;
             scene
                 .ui
                 .images
                 .iter()
                 .find(|image| image.ent_path == instance_path.entity_path)
                 .and_then(|image| {
+                    // If we're here because of back-projection, but this wasn't actually a depth image, drop out.
+                    // (the back-projection property may be true despite this not being a depth image!)
+                    if hit.hit_type != PickingHitType::TexturedRect
+                        && *ent_properties.backproject_depth.get()
+                        && image.tensor.meaning != TensorDataMeaning::Depth
+                    {
+                        return None;
+                    }
                     image.tensor.image_height_width_channels().map(|[_, w, _]| {
-                        (
-                            image,
-                            hit.instance_path_hash
-                                .instance_key
-                                .to_2d_image_coordinate(w),
-                        )
+                        let coordinates = hit
+                            .instance_path_hash
+                            .instance_key
+                            .to_2d_image_coordinate(w);
+                        (image, coordinates)
                     })
                 })
         } else {
             None
         };
+        if picked_image_with_coords.is_some() {
+            // We don't support selecting pixels yet.
+            instance_path.instance_key = re_log_types::component_types::InstanceKey::SPLAT;
+        }
 
         hovered_items.push(crate::misc::Item::InstancePath(
             Some(space_view_id),
@@ -876,7 +885,7 @@ pub fn picking(
                     .iter()
                     .map(|cam| {
                         (
-                            cam.instance_path_hash,
+                            cam.ent_path.clone(),
                             hovered_point.and_then(|pos| cam.project_onto_2d(pos)),
                         )
                     })

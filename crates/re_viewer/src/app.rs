@@ -744,7 +744,7 @@ impl App {
     fn cleanup(&mut self) {
         crate::profile_function!();
 
-        self.log_dbs.retain(|_, log_db| !log_db.is_empty());
+        self.log_dbs.retain(|_, log_db| !log_db.is_default());
 
         if !self.log_dbs.contains_key(&self.state.selected_rec_id) {
             self.state.selected_rec_id = self.log_dbs.keys().next().cloned().unwrap_or_default();
@@ -851,7 +851,7 @@ impl App {
     fn log_db_is_nonempty(&self) -> bool {
         self.log_dbs
             .get(&self.state.selected_rec_id)
-            .map_or(false, |log_db| !log_db.is_empty())
+            .map_or(false, |log_db| !log_db.is_default())
     }
 
     fn log_db(&mut self) -> &mut LogDb {

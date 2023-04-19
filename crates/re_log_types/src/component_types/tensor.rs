@@ -330,7 +330,9 @@ pub enum TensorDataMeaning {
     Depth,
 }
 
-/// A Multi-dimensional Tensor
+/// A Multi-dimensional Tensor.
+///
+/// All clones are shallow.
 ///
 /// ## Examples
 ///
@@ -607,10 +609,10 @@ impl<'a> TryFrom<&'a Tensor> for ::ndarray::ArrayViewD<'a, half::f16> {
 
 /// Errors when loading [`Tensor`] from the [`image`] crate.
 #[cfg(feature = "image")]
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Clone, Debug)]
 pub enum TensorImageLoadError {
     #[error(transparent)]
-    Image(#[from] image::ImageError),
+    Image(std::sync::Arc<image::ImageError>),
 
     #[error("Unsupported JPEG color type: {0:?}. Only RGB Jpegs are supported")]
     UnsupportedJpegColorType(image::ColorType),
@@ -619,7 +621,43 @@ pub enum TensorImageLoadError {
     UnsupportedImageColorType(image::ColorType),
 
     #[error("Failed to load file: {0}")]
-    ReadError(#[from] std::io::Error),
+    ReadError(std::sync::Arc<std::io::Error>),
+
+    #[error("The encoded tensor did not match its metadata {expected:?} != {found:?}")]
+    InvalidMetaData {
+        expected: Vec<TensorDimension>,
+        found: Vec<TensorDimension>,
+    },
+}
+
+#[cfg(feature = "image")]
+impl From<image::ImageError> for TensorImageLoadError {
+    #[inline]
+    fn from(err: image::ImageError) -> Self {
+        TensorImageLoadError::Image(std::sync::Arc::new(err))
+    }
+}
+
+#[cfg(feature = "image")]
+impl From<std::io::Error> for TensorImageLoadError {
+    #[inline]
+    fn from(err: std::io::Error) -> Self {
+        TensorImageLoadError::ReadError(std::sync::Arc::new(err))
+    }
+}
+
+/// Errors when converting [`Tensor`] to [`image`] images.
+#[cfg(feature = "image")]
+#[derive(thiserror::Error, Debug)]
+pub enum TensorImageSaveError {
+    #[error("Expected image-shaped tensor, got {0:?}")]
+    ShapeNotAnImage(Vec<TensorDimension>),
+
+    #[error("Cannot convert tensor with {0} channels and datatype {1} to an image")]
+    UnsupportedChannelsDtype(u64, TensorDataType),
+
+    #[error("The tensor data did not match tensor dimensions")]
+    BadData,
 }
 
 /// Errors when converting [`Tensor`] to [`image`] images.
@@ -697,14 +735,191 @@ impl Tensor {
     /// Construct a tensor from something that can be turned into a [`image::DynamicImage`].
     ///
     /// Requires the `image` feature.
-    pub fn from_image(image: impl Into<image::DynamicImage>) -> Result<Self, TensorImageLoadError> {
+    ///
+    ) -> Result<Tensor, TensorImageLoadError> {
+        Self::from_dynamic_image(image.into())
+    }
+
+    ///
+    /// Requires the `image` feature.
+    ///
+    /// This is a convenience function that calls [`DecodedTensor::from_dynamic_image`].
+    pub fn from_dynamic_image(image: image::DynamicImage) -> Result<Tensor, TensorImageLoadError> {
+        DecodedTensor::from_dynamic_image(image).map(DecodedTensor::into_inner)
+    }
+
+    /// Predicts if [`Self::to_dynamic_image`] is likely to succeed, without doing anything expensive
+    pub fn could_be_dynamic_image(&self) -> bool {
+        self.is_shaped_like_an_image()
+            && matches!(
+                self.dtype(),
+                TensorDataType::U8
+                    | TensorDataType::U16
+                    | TensorDataType::F16
+                    | TensorDataType::F32
+                    | TensorDataType::F64
+            )
+    }
+
+    /// Try to convert an image-like tensor into an [`image::DynamicImage`].
+    pub fn to_dynamic_image(&self) -> Result<image::DynamicImage, TensorImageSaveError> {
+        use ecolor::{gamma_u8_from_linear_f32, linear_u8_from_linear_f32};
+        use image::{DynamicImage, GrayImage, RgbImage, RgbaImage};
+
+        type Rgb16Image = image::ImageBuffer<image::Rgb<u16>, Vec<u16>>;
+        type Rgba16Image = image::ImageBuffer<image::Rgba<u16>, Vec<u16>>;
+        type Gray16Image = image::ImageBuffer<image::Luma<u16>, Vec<u16>>;
+
+        let [h, w, channels] = self
+            .image_height_width_channels()
+            .ok_or_else(|| TensorImageSaveError::ShapeNotAnImage(self.shape.clone()))?;
+        let w = w as u32;
+        let h = h as u32;
+
+        let dyn_img_result =
+            match (channels, &self.data) {
+                (1, TensorData::U8(buf)) => {
+                    GrayImage::from_raw(w, h, buf.as_slice().to_vec()).map(DynamicImage::ImageLuma8)
+                }
+                (1, TensorData::U16(buf)) => Gray16Image::from_raw(w, h, buf.as_slice().to_vec())
+                    .map(DynamicImage::ImageLuma16),
+                // TODO(emilk) f16
+                (1, TensorData::F32(buf)) => {
+                    let pixels = buf
+                        .iter()
+                        .map(|pixel| gamma_u8_from_linear_f32(*pixel))
+                        .collect();
+                    GrayImage::from_raw(w, h, pixels).map(DynamicImage::ImageLuma8)
+                }
+                (1, TensorData::F64(buf)) => {
+                    let pixels = buf
+                        .iter()
+                        .map(|&pixel| gamma_u8_from_linear_f32(pixel as f32))
+                        .collect();
+                    GrayImage::from_raw(w, h, pixels).map(DynamicImage::ImageLuma8)
+                }
+
+                (3, TensorData::U8(buf)) => {
+                    RgbImage::from_raw(w, h, buf.as_slice().to_vec()).map(DynamicImage::ImageRgb8)
+                }
+                (3, TensorData::U16(buf)) => Rgb16Image::from_raw(w, h, buf.as_slice().to_vec())
+                    .map(DynamicImage::ImageRgb16),
+                (3, TensorData::F32(buf)) => {
+                    let pixels = buf.iter().copied().map(gamma_u8_from_linear_f32).collect();
+                    RgbImage::from_raw(w, h, pixels).map(DynamicImage::ImageRgb8)
+                }
+                (3, TensorData::F64(buf)) => {
+                    let pixels = buf
+                        .iter()
+                        .map(|&comp| gamma_u8_from_linear_f32(comp as f32))
+                        .collect();
+                    RgbImage::from_raw(w, h, pixels).map(DynamicImage::ImageRgb8)
+                }
+
+                (4, TensorData::U8(buf)) => {
+                    RgbaImage::from_raw(w, h, buf.as_slice().to_vec()).map(DynamicImage::ImageRgba8)
+                }
+                (4, TensorData::U16(buf)) => Rgba16Image::from_raw(w, h, buf.as_slice().to_vec())
+                    .map(DynamicImage::ImageRgba16),
+                (4, TensorData::F32(buf)) => {
+                    let rgba: &[[f32; 4]] = bytemuck::cast_slice(buf.as_slice());
+                    let pixels: Vec<u8> = rgba
+                        .iter()
+                        .flat_map(|&[r, g, b, a]| {
+                            let r = gamma_u8_from_linear_f32(r);
+                            let g = gamma_u8_from_linear_f32(g);
+                            let b = gamma_u8_from_linear_f32(b);
+                            let a = linear_u8_from_linear_f32(a);
+                            [r, g, b, a]
+                        })
+                        .collect();
+                    RgbaImage::from_raw(w, h, pixels).map(DynamicImage::ImageRgba8)
+                }
+                (4, TensorData::F64(buf)) => {
+                    let rgba: &[[f64; 4]] = bytemuck::cast_slice(buf.as_slice());
+                    let pixels: Vec<u8> = rgba
+                        .iter()
+                        .flat_map(|&[r, g, b, a]| {
+                            let r = gamma_u8_from_linear_f32(r as _);
+                            let g = gamma_u8_from_linear_f32(g as _);
+                            let b = gamma_u8_from_linear_f32(b as _);
+                            let a = linear_u8_from_linear_f32(a as _);
+                            [r, g, b, a]
+                        })
+                        .collect();
+                    RgbaImage::from_raw(w, h, pixels).map(DynamicImage::ImageRgba8)
+                }
+
+                (_, _) => {
+                    return Err(TensorImageSaveError::UnsupportedChannelsDtype(
+                        channels,
+                        self.data.dtype(),
+                    ))
+                }
+            };
+
+        dyn_img_result.ok_or(TensorImageSaveError::BadData)
+    }
+}
+
+// ----------------------------------------------------------------------------
+
+/// A thin wrapper around a [`Tensor`] that is guaranteed to not be compressed (never a jpeg).
+///
+/// All clones are shallow, like for [`Tensor`].
+#[derive(Clone)]
+pub struct DecodedTensor(Tensor);
+
+impl DecodedTensor {
+    #[inline(always)]
+    pub fn inner(&self) -> &Tensor {
+        &self.0
+    }
+
+    #[inline(always)]
+    pub fn into_inner(self) -> Tensor {
+        self.0
+    }
+}
+
+impl TryFrom<Tensor> for DecodedTensor {
+    type Error = Tensor;
+
+    fn try_from(tensor: Tensor) -> Result<Self, Tensor> {
+        match &tensor.data {
+            TensorData::U8(_)
+            | TensorData::U16(_)
+            | TensorData::U32(_)
+            | TensorData::U64(_)
+            | TensorData::I8(_)
+            | TensorData::I16(_)
+            | TensorData::I32(_)
+            | TensorData::I64(_)
+            | TensorData::F32(_)
+            | TensorData::F64(_) => Ok(Self(tensor)),
+
+            TensorData::JPEG(_) => Err(tensor),
+        }
+    }
+}
+
+#[cfg(feature = "image")]
+impl DecodedTensor {
+    /// Construct a tensor from something that can be turned into a [`image::DynamicImage`].
+    ///
+    /// Requires the `image` feature.
+    pub fn from_image(
+        image: impl Into<image::DynamicImage>,
+    ) -> Result<DecodedTensor, TensorImageLoadError> {
         Self::from_dynamic_image(image.into())
     }
 
     /// Construct a tensor from [`image::DynamicImage`].
     ///
     /// Requires the `image` feature.
-    pub fn from_dynamic_image(image: image::DynamicImage) -> Result<Self, TensorImageLoadError> {
+    pub fn from_dynamic_image(
+        image: image::DynamicImage,
+    ) -> Result<DecodedTensor, TensorImageLoadError> {
         let (w, h) = (image.width(), image.height());
 
         let (depth, data) = match image {
@@ -743,8 +958,7 @@ impl Tensor {
                 ));
             }
         };
-
-        Ok(Self {
+        let tensor = Tensor {
             tensor_id: TensorId::random(),
             shape: vec![
                 TensorDimension::height(h as _),
@@ -754,7 +968,67 @@ impl Tensor {
             data,
             meaning: TensorDataMeaning::Unknown,
             meter: None,
-        })
+        };
+        Ok(DecodedTensor(tensor))
+    }
+
+    pub fn try_decode(maybe_encoded_tensor: Tensor) -> Result<Self, TensorImageLoadError> {
+        crate::profile_function!();
+
+        match &maybe_encoded_tensor.data {
+            TensorData::U8(_)
+            | TensorData::U16(_)
+            | TensorData::U32(_)
+            | TensorData::U64(_)
+            | TensorData::I8(_)
+            | TensorData::I16(_)
+            | TensorData::I32(_)
+            | TensorData::I64(_)
+            | TensorData::F32(_)
+            | TensorData::F64(_) => Ok(Self(maybe_encoded_tensor)),
+
+            TensorData::JPEG(buf) => {
+                use image::io::Reader as ImageReader;
+                let mut reader = ImageReader::new(std::io::Cursor::new(buf.0.as_slice()));
+                reader.set_format(image::ImageFormat::Jpeg);
+                let img = {
+                    crate::profile_scope!("decode_jpeg");
+                    reader.decode()?
+                };
+                let decoded_tensor = DecodedTensor::from_image(img)?;
+                if decoded_tensor.shape() == maybe_encoded_tensor.shape() {
+                    Ok(decoded_tensor)
+                } else {
+                    Err(TensorImageLoadError::InvalidMetaData {
+                        expected: maybe_encoded_tensor.shape().into(),
+                        found: decoded_tensor.shape().into(),
+                    })
+                }
+            }
+        }
+    }
+}
+
+impl AsRef<Tensor> for DecodedTensor {
+    #[inline(always)]
+    fn as_ref(&self) -> &Tensor {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for DecodedTensor {
+    type Target = Tensor;
+
+    #[inline(always)]
+    fn deref(&self) -> &Tensor {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<Tensor> for DecodedTensor {
+    #[inline(always)]
+    fn borrow(&self) -> &Tensor {
+        &self.0
     }
 
     /// Predicts if [`Self::to_dynamic_image`] is likely to succeed, without doing anything expensive
