@@ -6,6 +6,8 @@ from rerun.components import REGISTERED_COMPONENT_NAMES, ComponentTypeFactory
 from rerun.components.point import Point3DArray, Point3DType
 from rerun.components.quaternion import QuaternionArray
 
+from typing import Union
+
 __all__ = ["ImuType", "Imu"]
 
 
@@ -14,7 +16,7 @@ class Imu(pa.ExtensionArray):  # type: ignore[misc]
         accel: npt.NDArray[np.float32],
         gyro: npt.NDArray[np.float32],
         orientation: npt.NDArray[np.float32],
-        mag: npt.NDArray[np.float32] | None = None,
+        mag: Union[npt.NDArray[np.float32], None] = None,
     ) -> "Imu":
         """Build Imu data from acceleration and gyroscope data."""
         assert accel.shape[0] == 3
