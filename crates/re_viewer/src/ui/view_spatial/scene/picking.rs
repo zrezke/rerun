@@ -122,9 +122,13 @@ impl PickingContext {
             &primitives.textured_rectangles_ids,
         );
         rect_hits.sort_by(|a, b| b.depth_offset.cmp(&a.depth_offset));
+        let ui_rect_hits = picking_ui_rects(self, ui_data);
 
         let mut hits = Vec::new();
 
+        // Start with gpu based picking as baseline. This is our prime source of picking information.
+        //
+        // ..unless the same object got also picked as part of a textured rect.
         // Textured rect picks also know where on the rect, making this the better source!
         // Note that whenever this happens, it means that the same object path has a textured rect and something else
         // e.g. a camera.

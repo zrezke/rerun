@@ -9,8 +9,8 @@ use crate::{
 
 use super::{
     data_blueprint::DataBlueprintTree, space_view_heuristics::default_queried_entities,
-    view_bar_chart, view_category::ViewCategory, view_spatial, view_tensor, view_text,
-    view_time_series,
+    view_bar_chart, view_category::ViewCategory, view_node_graph, view_spatial, view_tensor,
+    view_text, view_time_series,
 };
 
 // ----------------------------------------------------------------------------

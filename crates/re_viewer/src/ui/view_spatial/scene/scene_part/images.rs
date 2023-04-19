@@ -52,6 +52,8 @@ fn push_tensor_texture(
         Ok(colormapped_texture) => {
             // TODO(emilk): let users pick texture filtering.
             // Always use nearest for magnification: let users see crisp individual pixels when they zoom
+            let texture_filter_magnification = re_renderer::renderer::TextureFilterMag::Nearest;
+
             // For minimization: we want a smooth linear (ideally mipmapped) filter for color images.
             // Note that this filtering is done BEFORE applying the color map!
             // For labeled/annotated/class_Id images we want nearest, because interpolating classes makes no sense.
@@ -68,6 +70,7 @@ fn push_tensor_texture(
             let textured_rect = re_renderer::renderer::TexturedRect {
                 top_left_corner_position: world_from_obj.transform_point3(glam::Vec3::ZERO),
                 extent_u: world_from_obj.transform_vector3(glam::Vec3::X * width as f32),
+                extent_v: world_from_obj.transform_vector3(glam::Vec3::Y * height as f32),
                 colormapped_texture,
                 options: RectangleOptions {
                     texture_filter_magnification,
