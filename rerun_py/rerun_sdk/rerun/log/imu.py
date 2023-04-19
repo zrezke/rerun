@@ -1,9 +1,11 @@
-from rerun import bindings
-from rerun.log.log_decorator import log_decorator
-from rerun.components.imu import Imu
-from typing import Dict, Any
-import numpy.typing as npt
+from typing import Any, Dict
+
 import numpy as np
+import numpy.typing as npt
+
+from rerun import bindings
+from rerun.components.imu import Imu
+from rerun.log.log_decorator import log_decorator
 
 
 @log_decorator
@@ -21,6 +23,10 @@ def log_imu(
         Acceleration vector in m/s^2.
     gyro:
         Angular velocity vector in rad/s.
+    orientation:
+        Orientation quaternion.
+    mag:
+        Magnetometer vector in uT.
     """
 
     if accel is not None:
