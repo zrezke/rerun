@@ -6,7 +6,7 @@ use re_arrow_store::{DataStoreConfig, TimeInt};
 use re_log_types::{
     component_types::InstanceKey, ArrowMsg, BeginRecordingMsg, Component as _, ComponentPath,
     DataCell, DataRow, DataTable, EntityPath, EntityPathHash, EntityPathOpMsg, LogMsg, PathOp,
-    RecordingId, RecordingInfo, RowId, TimePoint, Timeline,
+    RecordingId, RecordingInfo, RowId, SizeBytes, TimePoint, Timeline,
 };
 
 use crate::{Error, TimesPerTimeline};
@@ -54,7 +54,7 @@ impl EntityDb {
             .or_insert_with(|| entity_path.clone());
     }
 
-    fn try_add_arrow_msg(&mut self, msg: &ArrowMsg) -> Result<(), Error> {
+    fn try_add_arrow_msg(&mut self, msg: &ArrowMsg) -> Result<u64, Error> {
         crate::profile_function!();
 
         // TODO(#1760): Compute the size of the datacells in the batching threads on the clients.
@@ -65,8 +65,7 @@ impl EntityDb {
         for row in table.to_rows() {
             self.try_add_data_row(&row)?;
         }
-
-        Ok(())
+        Ok(table.total_size_bytes())
     }
 
     fn try_add_data_row(&mut self, row: &DataRow) -> Result<(), Error> {
@@ -212,11 +211,12 @@ impl LogDb {
         self.num_rows() == 0
     }
 
-    pub fn add(&mut self, msg: &LogMsg) -> Result<(), Error> {
+    // Returns size of the data added
+    pub fn add(&mut self, msg: &LogMsg) -> Result<u64, Error> {
         crate::profile_function!();
 
-        match &msg {
-            LogMsg::BeginRecordingMsg(msg) => self.add_begin_recording_msg(msg),
+        let size = match &msg {
+            LogMsg::BeginRecordingMsg(msg) => self.add_begin_recording_msg(msg).total_size_bytes(),
             LogMsg::EntityPathOpMsg(_, msg) => {
                 let EntityPathOpMsg {
                     row_id,
@@ -225,16 +225,17 @@ impl LogDb {
                 } = msg;
                 self.entity_op_msgs.insert(*row_id, msg.clone());
                 self.entity_db.add_path_op(*row_id, time_point, path_op);
+                row_id.total_size_bytes()
             }
             LogMsg::ArrowMsg(_, inner) => self.entity_db.try_add_arrow_msg(inner)?,
-            LogMsg::Goodbye(_) => {}
-        }
-
-        Ok(())
+            LogMsg::Goodbye(_) => 0,
+        };
+        Ok(size)
     }
 
-    fn add_begin_recording_msg(&mut self, msg: &BeginRecordingMsg) {
+    fn add_begin_recording_msg(&mut self, msg: &BeginRecordingMsg) -> RowId {
         self.recording_msg = Some(msg.clone());
+        msg.row_id
     }
 
     /// Returns an iterator over all [`EntityPathOpMsg`]s that have been written to this `LogDb`.

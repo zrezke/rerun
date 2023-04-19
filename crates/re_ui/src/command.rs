@@ -23,6 +23,7 @@ pub enum Command {
     OpenProfiler,
 
     ToggleMemoryPanel,
+    ToggleBandwidthPanel,
     ToggleBlueprintPanel,
     ToggleSelectionPanel,
     ToggleTimePanel,
@@ -88,6 +89,10 @@ impl Command {
             Command::ToggleMemoryPanel => (
                 "Toggle memory panel",
                 "Investigate what is using up RAM in Depthai Viewer",
+            ),
+            Command::ToggleBandwidthPanel => (
+                "Toggle bandwidth panel",
+                "Investigate how much bandwidth is used in Depthai Viewer",
             ),
             Command::ToggleBlueprintPanel => ("Toggle blueprint panel", "Toggle the left panel"),
             Command::ToggleSelectionPanel => ("Toggle selection panel", "Toggle the right panel"),
@@ -165,6 +170,7 @@ impl Command {
             #[cfg(not(target_arch = "wasm32"))]
             Command::OpenProfiler => Some(ctrl_shift(Key::P)),
             Command::ToggleMemoryPanel => Some(ctrl_shift(Key::M)),
+            Command::ToggleBandwidthPanel => Some(ctrl_shift(Key::B)),
             Command::ToggleBlueprintPanel => Some(ctrl_shift(Key::B)),
             Command::ToggleSelectionPanel => Some(ctrl_shift(Key::S)),
             Command::ToggleTimePanel => Some(ctrl_shift(Key::T)),

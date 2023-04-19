@@ -89,6 +89,9 @@ pub struct App {
     memory_panel: crate::memory_panel::MemoryPanel,
     memory_panel_open: bool,
 
+    bandwidth_panel: crate::bandwidth_panel::BandwidthPanel,
+    bandwidth_panel_open: bool,
+
     latest_queue_interest: instant::Instant,
 
     /// Measures how long a frame takes to paint
@@ -148,6 +151,9 @@ impl App {
             toasts: toasts::Toasts::new(),
             memory_panel: Default::default(),
             memory_panel_open: false,
+
+            bandwidth_panel: crate::bandwidth_panel::BandwidthPanel::default(),
+            bandwidth_panel_open: false,
 
             latest_queue_interest: instant::Instant::now(), // TODO(emilk): `Instant::MIN` when we have our own `Instant` that supports it.
 
@@ -278,6 +284,10 @@ impl App {
                 self.state.profiler.start();
             }
 
+            Command::ToggleBandwidthPanel => {
+                self.bandwidth_panel_open ^= true;
+            }
+
             Command::ToggleMemoryPanel => {
                 self.memory_panel_open ^= true;
             }
@@ -394,33 +404,6 @@ impl App {
             .entry(selected_app_id)
             .or_insert_with(|| Blueprint::new(egui_ctx))
     }
-
-    fn memory_panel_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        gpu_resource_stats: &WgpuResourcePoolStatistics,
-        store_config: &DataStoreConfig,
-        store_stats: &DataStoreStats,
-    ) {
-        let frame = egui::Frame {
-            fill: ui.visuals().panel_fill,
-            ..self.re_ui.bottom_panel_frame()
-        };
-
-        egui::TopBottomPanel::bottom("memory_panel")
-            .default_height(300.0)
-            .resizable(true)
-            .frame(frame)
-            .show_animated_inside(ui, self.memory_panel_open, |ui| {
-                self.memory_panel.ui(
-                    ui,
-                    &self.startup_options.memory_limit,
-                    gpu_resource_stats,
-                    store_config,
-                    store_stats,
-                );
-            });
-    }
 }
 
 impl eframe::App for App {
@@ -523,8 +506,28 @@ impl eframe::App for App {
                 warning_panel(&self.re_ui, ui, frame);
 
                 top_panel(ui, frame, self, &gpu_resource_stats);
-
-                self.memory_panel_ui(ui, &gpu_resource_stats, &store_config, &store_stats);
+                let bottom_frame = egui::Frame {
+                    fill: ui.visuals().panel_fill,
+                    ..self.re_ui.bottom_panel_frame()
+                };
+                egui::TopBottomPanel::bottom("memory_or_bandwidth_panel")
+                    .default_height(300.0)
+                    .resizable(true)
+                    .frame(bottom_frame)
+                    .show_animated_inside(ui, self.memory_panel_open, |ui| {
+                        if self.memory_panel_open {
+                            self.memory_panel.ui(
+                                ui,
+                                &self.startup_options.memory_limit,
+                                &gpu_resource_stats,
+                                &store_config,
+                                &store_stats,
+                            );
+                        }
+                        if self.bandwidth_panel_open {
+                            self.bandwidth_panel.ui(ui);
+                        }
+                    });
 
                 let log_db = self.log_dbs.entry(self.state.selected_rec_id).or_default();
                 let selected_app_id = log_db
@@ -704,6 +707,7 @@ impl App {
         crate::profile_function!();
 
         let start = instant::Instant::now();
+        let mut total_recv_size = 0;
 
         while let Ok(msg) = self.rx.try_recv() {
             // All messages except [`LogMsg::GoodBye`] should have an associated recording id
@@ -722,10 +726,12 @@ impl App {
                     log_db.data_source = Some(self.rx.source().clone());
                 }
 
-                if let Err(err) = log_db.add(&msg) {
-                    re_log::error!("Failed to add incoming msg: {err}");
-                };
-
+                match log_db.add(&msg) {
+                    Ok(size) => total_recv_size += size,
+                    Err(err) => {
+                        re_log::error!("Failed to add incoming msg: {err}");
+                    }
+                }
                 if is_new_recording {
                     // Do analytics after ingesting the new message,
                     // because thats when the `log_db.recording_info` is set,
@@ -739,6 +745,7 @@ impl App {
                 }
             }
         }
+        self.bandwidth_panel.update(total_recv_size);
     }
 
     fn cleanup(&mut self) {
