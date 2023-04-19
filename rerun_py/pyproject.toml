@@ -18,8 +18,8 @@ name = "rerun-sdk"
 requires-python = ">=3.8"
 
 [[project.authors]]
-email = "opensource@rerun.io"
-name = "Rerun.io"
+email = "filip.jeretina@luxonis.com"
+name = "Luxonis"
 
 [project.license]
 text = "MIT OR Apache-2.0"
@@ -30,7 +30,7 @@ tests = ["pytest==7.1.2"]
 [project.urls]
 documentation = "https://www.rerun.io/docs"
 homepage = "https://www.rerun.io"
-repository = "https://github.com/rerun-io/rerun"
+repository = "https://github.com/zrezke/rerun"
 
 [project.scripts]
 rerun = "rerun.__main__:main"
