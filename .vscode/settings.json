@@ -16,7 +16,7 @@
   "files.autoGuessEncoding": true,
   "python.formatting.provider": "black",
   "python.formatting.blackArgs": ["--config", "rerun_py/pyproject.toml"],
-  "python.linting.mypyEnabled": false,
+  "python.linting.mypyEnabled": true,
   "python.linting.enabled": true,
   "cSpell.words": [
     "andreas",
@@ -71,5 +71,5 @@
   "rust-analyzer.cargo.buildScripts.enable": false,
   "python.analysis.extraPaths": ["rerun_py/rerun_sdk"],
   "ruff.args": ["--config", "rerun_py/pyproject.toml"],
-  "python.linting.pylintEnabled": true
+  "python.linting.pylintEnabled": false
 }
