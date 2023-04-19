@@ -225,7 +225,7 @@ impl WebSocket {
                             return Some(back_message);
                         }
                         Err(err) => {
-                            re_log::error!("Error: {:?}", err);
+                            re_log::error!("Error: {:}", err);
                             return None;
                         }
                     }
