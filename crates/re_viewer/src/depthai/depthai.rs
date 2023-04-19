@@ -580,7 +580,7 @@ impl State {
                     self.backend_comms.set_pipeline(&self.device_config.config);
                     self.device_config.update_in_progress = true;
                 }
-                WsMessageData::Error(eror) => {
+                WsMessageData::Error(error) => {
                     re_log::error!("Error: {:}", error.message);
                     self.device_config.update_in_progress = false;
                     match error.action {
