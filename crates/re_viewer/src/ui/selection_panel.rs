@@ -53,6 +53,7 @@ struct DepthaiTabs<'a, 'b> {
     now: f64, // Time elapsed from spawning SelectionPanel
     unsubscribe_from_imu: bool,
     imu_visible: &'a mut bool,
+    apply_button_enabled: &'a mut bool,
 }
 
 impl<'a, 'b> DepthaiTabs<'a, 'b> {
@@ -65,292 +66,186 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
 
     fn device_configuration_ui(&mut self, ui: &mut egui::Ui) {
         // re_log::info!("pipeline_state: {:?}", pipeline_state);
-        let mut device_config = self.ctx.depthai_state.device_config.config.clone();
-        let mut depth = device_config.depth.unwrap_or_default();
-        let mut update_device_config = false;
+        let mut device_config = self.ctx.depthai_state.modified_device_config.config.clone();
         let available_size = ui.available_size();
-
-        ui.add_enabled_ui(self.ctx.depthai_state.selected_device.id != "", |ui| {
-            ui.vertical(|ui| {
-                ui.collapsing("Color Camera", |ui| {
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Resolution: ");
-                            egui::ComboBox::from_id_source("color_camera_resolution")
-                                .selected_text(format!("{}", device_config.color_camera.resolution))
-                                .width(100.0)
-                                .show_ui(ui, |ui| {
-                                    for res in self
-                                        .ctx
-                                        .depthai_state
-                                        .selected_device
-                                        .supported_color_resolutions
-                                        .iter()
-                                    {
-                                        if ui
-                                            .selectable_value(
-                                                &mut device_config.color_camera.resolution,
-                                                *res,
-                                                format!("{res}"),
-                                            )
-                                            .changed()
-                                        {
-                                            update_device_config = true;
-                                        }
-                                    }
-                                });
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("FPS: ");
-                            if ui
-                                .add(egui::DragValue::new(&mut device_config.color_camera.fps))
-                                .changed()
-                            {
-                                update_device_config = true;
-                            }
-                        });
-                        if ui
-                            .checkbox(&mut device_config.color_camera.stream_enabled, "Stream")
-                            .changed()
-                        {
-                            update_device_config = true;
-                        }
-                    });
-                });
-                ui.collapsing("Left Mono Camera", |ui| {
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Resolution: ");
-                            egui::ComboBox::from_id_source("left_camera_resolution")
-                                .width(70.0)
-                                .selected_text(format!("{}", device_config.left_camera.resolution))
-                                .show_ui(ui, |ui| {
-                                    for res in self
-                                        .ctx
-                                        .depthai_state
-                                        .selected_device
-                                        .supported_left_mono_resolutions
-                                        .iter()
-                                    {
-                                        if ui
-                                            .selectable_value(
-                                                &mut device_config.left_camera.resolution,
-                                                *res,
-                                                format!("{res}"),
-                                            )
-                                            .changed()
-                                        {
-                                            update_device_config = true;
-                                        }
-                                    }
-                                });
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("FPS: ");
-                            if ui
-                                .add(egui::DragValue::new(&mut device_config.left_camera.fps))
-                                .changed()
-                            {
-                                update_device_config = true;
-                            }
-                        });
-                        if ui
-                            .checkbox(&mut device_config.left_camera.stream_enabled, "Stream")
-                            .changed()
-                        {
-                            update_device_config = true;
-                        }
-                    });
-                });
-                ui.collapsing("Right Mono Camera", |ui| {
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Resolution: ");
-                            egui::ComboBox::from_id_source("right_camera_resolution")
-                                .width(70.0)
-                                .selected_text(format!("{}", device_config.right_camera.resolution))
-                                .show_ui(ui, |ui| {
-                                    for res in self
-                                        .ctx
-                                        .depthai_state
-                                        .selected_device
-                                        .supported_right_mono_resolutions
-                                        .iter()
-                                    {
-                                        if ui
-                                            .selectable_value(
-                                                &mut device_config.right_camera.resolution,
-                                                *res,
-                                                format!("{res}"),
-                                            )
-                                            .changed()
-                                        {
-                                            update_device_config = true;
-                                        }
-                                    }
-                                });
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("FPS: ");
-                            if ui
-                                .add(egui::DragValue::new(&mut device_config.right_camera.fps))
-                                .changed()
-                            {
-                                update_device_config = true;
-                            }
-                        });
-                        if ui
-                            .checkbox(&mut device_config.right_camera.stream_enabled, "Stream")
-                            .changed()
-                        {
-                            update_device_config = true;
-                        }
-                    });
-                });
-                if ui
-                    .checkbox(&mut device_config.depth_enabled, "Depth")
-                    .changed()
-                {
-                    update_device_config = true;
-                }
-                let mut depth_updated = false;
-                ui.collapsing("Depth settings", |ui| {
-                    ui.vertical(|ui| {
-                        if ui.checkbox(&mut depth.lr_check, "LR Check").changed() {
-                            depth_updated = true;
-                        }
-                        ui.horizontal(|ui| {
-                            ui.label("Align to: ");
-                            egui::ComboBox::from_id_source("depth_align_combo")
-                                .width(100.0)
-                                .selected_text(format!("{:?}", depth.align))
-                                .show_ui(ui, |ui| {
-                                    for align in depthai::BoardSocket::iter() {
-                                        if ui
-                                            .selectable_value(
-                                                &mut depth.align,
-                                                align,
-                                                format!("{:?}", align),
-                                            )
-                                            .changed()
-                                        {
-                                            depth_updated = true;
-                                        }
-                                    }
-                                });
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Median Filter: ");
-                            egui::ComboBox::from_id_source("median_filter_combo")
-                                .width(100.0)
-                                .selected_text(format!("{:?}", depth.median))
-                                .show_ui(ui, |ui| {
-                                    for filter in depthai::DepthMedianFilter::iter() {
-                                        if ui
-                                            .selectable_value(
-                                                &mut depth.median,
-                                                filter,
-                                                format!("{:?}", filter),
-                                            )
-                                            .changed()
-                                        {
-                                            depth_updated = true;
-                                        }
-                                    }
-                                });
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("LR Threshold: ");
-                            if ui
-                                .add(
-                                    egui::DragValue::new(&mut depth.lrc_threshold)
-                                        .clamp_range(0..=10),
-                                )
-                                .changed()
-                            {
-                                depth_updated = true;
-                            }
-                        });
-
-                        if ui
-                            .checkbox(&mut depth.extended_disparity, "Extended Disparity")
-                            .changed()
-                        {
-                            depth_updated = true;
-                        }
-                        if ui
-                            .checkbox(&mut depth.subpixel_disparity, "Subpixel Disparity")
-                            .changed()
-                        {
-                            depth_updated = true;
-                        }
-                        ui.horizontal(|ui| {
-                            ui.label("Sigma: ");
-                            if ui
-                                .add(egui::DragValue::new(&mut depth.sigma).clamp_range(0..=65535))
-                                .changed()
-                            {
-                                depth_updated = true;
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Confidence: ");
-                            if ui
-                                .add(
-                                    egui::DragValue::new(&mut depth.confidence)
-                                        .clamp_range(0..=255),
-                                )
-                                .changed()
-                            {
-                                depth_updated = true;
-                            }
-                        });
-                    });
-                    if depth_updated {
-                        if device_config.depth_enabled {
-                            update_device_config = true;
-                        } else {
-                            self.ctx.depthai_state.device_config.config.depth = Some(depth);
-                        }
-                    }
-                    ui.horizontal(|ui| {
-                        if ui
-                            .checkbox(&mut depth.pointcloud.enabled, "Point Cloud")
-                            .changed()
-                        {
-                            if device_config.depth_enabled {
-                                update_device_config = true;
-                            }
-                        }
-                    });
-                });
-
+        ui.vertical(|ui| {
+            ui.collapsing("Color Camera", |ui| {
                 ui.vertical(|ui| {
-                    ui.label("AI Model:");
-                    egui::ComboBox::from_id_source("ai_model_selection")
-                        .width(70.0)
-                        .selected_text(format!("{}", device_config.ai_model.display_name))
-                        .show_ui(ui, |ui| {
-                            for nn in self.ctx.depthai_state.neural_networks.iter() {
-                                if ui
-                                    .selectable_value(
-                                        &mut device_config.ai_model,
-                                        nn.clone(),
-                                        &nn.display_name,
-                                    )
-                                    .changed()
+                    ui.horizontal(|ui| {
+                        ui.label("Resolution: ");
+                        egui::ComboBox::from_id_source("color_camera_resolution")
+                            .selected_text(format!("{}", device_config.color_camera.resolution))
+                            .width(100.0)
+                            .show_ui(ui, |ui| {
+                                for res in self
+                                    .ctx
+                                    .depthai_state
+                                    .selected_device
+                                    .supported_color_resolutions
+                                    .iter()
                                 {
-                                    update_device_config = true;
+                                    ui.selectable_value(
+                                        &mut device_config.color_camera.resolution,
+                                        *res,
+                                        format!("{res}"),
+                                    );
                                 }
-                            }
-                        });
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("FPS: ");
+                        ui.add(egui::DragValue::new(&mut device_config.color_camera.fps));
+                    });
+                    ui.checkbox(&mut device_config.color_camera.stream_enabled, "Stream");
                 });
             });
-            if update_device_config {
-                device_config.depth = Some(depth);
-                self.ctx.depthai_state.set_device_config(&mut device_config);
-            }
+            ui.collapsing("Left Mono Camera", |ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Resolution: ");
+                        egui::ComboBox::from_id_source("left_camera_resolution")
+                            .width(70.0)
+                            .selected_text(format!("{}", device_config.left_camera.resolution))
+                            .show_ui(ui, |ui| {
+                                for res in self
+                                    .ctx
+                                    .depthai_state
+                                    .selected_device
+                                    .supported_left_mono_resolutions
+                                    .iter()
+                                {
+                                    ui.selectable_value(
+                                        &mut device_config.left_camera.resolution,
+                                        *res,
+                                        format!("{res}"),
+                                    );
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("FPS: ");
+                        ui.add(egui::DragValue::new(&mut device_config.left_camera.fps));
+                    });
+                    ui.checkbox(&mut device_config.left_camera.stream_enabled, "Stream");
+                });
+            });
+            ui.collapsing("Right Mono Camera", |ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Resolution: ");
+                        egui::ComboBox::from_id_source("right_camera_resolution")
+                            .width(70.0)
+                            .selected_text(format!("{}", device_config.right_camera.resolution))
+                            .show_ui(ui, |ui| {
+                                for res in self
+                                    .ctx
+                                    .depthai_state
+                                    .selected_device
+                                    .supported_right_mono_resolutions
+                                    .iter()
+                                {
+                                    ui.selectable_value(
+                                        &mut device_config.right_camera.resolution,
+                                        *res,
+                                        format!("{res}"),
+                                    );
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("FPS: ");
+                        ui.add(egui::DragValue::new(&mut device_config.right_camera.fps));
+                    });
+                    ui.checkbox(&mut device_config.right_camera.stream_enabled, "Stream");
+                });
+            });
+            ui.checkbox(&mut device_config.depth_enabled, "Depth");
+
+            let mut depth = device_config.depth.unwrap_or_default();
+            ui.collapsing("Depth settings", |ui| {
+                ui.vertical(|ui| {
+                    ui.checkbox(&mut depth.lr_check, "LR Check");
+                    ui.horizontal(|ui| {
+                        ui.label("Align to: ");
+                        egui::ComboBox::from_id_source("depth_align_combo")
+                            .width(100.0)
+                            .selected_text(format!("{:?}", depth.align))
+                            .show_ui(ui, |ui| {
+                                for align in depthai::BoardSocket::iter() {
+                                    ui.selectable_value(
+                                        &mut depth.align,
+                                        align,
+                                        format!("{:?}", align),
+                                    );
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Median Filter: ");
+                        egui::ComboBox::from_id_source("median_filter_combo")
+                            .width(100.0)
+                            .selected_text(format!("{:?}", depth.median))
+                            .show_ui(ui, |ui| {
+                                for filter in depthai::DepthMedianFilter::iter() {
+                                    ui.selectable_value(
+                                        &mut depth.median,
+                                        filter,
+                                        format!("{:?}", filter),
+                                    );
+                                }
+                            });
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("LR Threshold: ");
+                        ui.add(egui::DragValue::new(&mut depth.lrc_threshold).clamp_range(0..=10));
+                    });
+
+                    ui.checkbox(&mut depth.extended_disparity, "Extended Disparity");
+                    ui.checkbox(&mut depth.subpixel_disparity, "Subpixel Disparity");
+                    ui.horizontal(|ui| {
+                        ui.label("Sigma: ");
+                        ui.add(egui::DragValue::new(&mut depth.sigma).clamp_range(0..=65535));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Confidence: ");
+                        ui.add(egui::DragValue::new(&mut depth.confidence).clamp_range(0..=255))
+                    });
+                });
+
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut depth.pointcloud.enabled, "Point Cloud");
+                });
+            });
+
+            ui.vertical(|ui| {
+                ui.label("AI Model:");
+                egui::ComboBox::from_id_source("ai_model_selection")
+                    .width(70.0)
+                    .selected_text(format!("{}", device_config.ai_model.display_name))
+                    .show_ui(ui, |ui| {
+                        for nn in self.ctx.depthai_state.neural_networks.iter() {
+                            ui.selectable_value(
+                                &mut device_config.ai_model,
+                                nn.clone(),
+                                &nn.display_name,
+                            );
+                        }
+                    });
+            });
+            device_config.depth = Some(depth);
+            self.ctx.depthai_state.modified_device_config.config = device_config.clone();
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(
+                    device_config != self.ctx.depthai_state.applied_device_config.config
+                        && self.ctx.depthai_state.selected_device.id != "",
+                    |ui| {
+                        if ui.button("Apply").clicked() {
+                            self.ctx.depthai_state.set_device_config(&mut device_config);
+                        }
+                    },
+                )
+            });
         });
     }
 
@@ -507,6 +402,8 @@ pub(crate) struct SelectionPanel {
     current_device_config_panel_min_height: f32, // A bit hacky, used to keep the top panel from becoming really small after showing spinner
     #[serde(skip)]
     imu_tab_visible: bool, // Used to subscribe to IMU data when the imu tab is shown, or rather unsubscribe when it's not (enables the user to view both the imu and the configuration at the same time)
+    #[serde(skip)]
+    apply_cfg_button_enabled: bool, // Used to disable the apply button when the config has changed, keeps the state between frames
 }
 
 impl Default for SelectionPanel {
@@ -519,6 +416,7 @@ impl Default for SelectionPanel {
             start_time: instant::Instant::now(),
             current_device_config_panel_min_height: 0.0,
             imu_tab_visible: false,
+            apply_cfg_button_enabled: false,
         }
     }
 }
@@ -602,7 +500,7 @@ impl SelectionPanel {
                                     });
                             });
 
-                            if ctx.depthai_state.device_config.update_in_progress {
+                            if ctx.depthai_state.applied_device_config.update_in_progress {
                                 ui.add_sized([ui.available_width(), 10.0], |ui: &mut egui::Ui| {
                                     ui.with_layout(
                                         egui::Layout::left_to_right(egui::Align::Center),
@@ -636,6 +534,7 @@ impl SelectionPanel {
                                         now: self.start_time.elapsed().as_nanos() as f64 / 1e9,
                                         unsubscribe_from_imu,
                                         imu_visible: &mut imu_tab_visible,
+                                        apply_button_enabled: &mut self.apply_cfg_button_enabled,
                                     },
                                 );
                             self.imu_tab_visible = imu_tab_visible;
@@ -652,7 +551,7 @@ impl SelectionPanel {
                         .show_inside(ui, |ui| {
                             if let Some(selection) = ctx
                                 .rec_cfg
-                                .selection_state
+                                .selection_stateLR
                                 .selection_ui(ctx.re_ui, ui, blueprint)
                             {
                                 ctx.set_multi_selection(selection.iter().cloned());
