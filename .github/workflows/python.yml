@@ -150,8 +150,8 @@ jobs:
         # find the dependencies to reinstall them.
         shell: bash
         run: |
-          pip uninstall rerun-sdk
-          pip install rerun-sdk==${{ env.expected_version }} --no-index --find-links pre-dist
+          pip uninstall depthai-viewer
+          pip install depthai-viewer==${{ env.expected_version }} --no-index --find-links pre-dist
 
       - name: Verify built wheel version
         shell: bash
@@ -166,7 +166,7 @@ jobs:
 
       - name: Run e2e test
         shell: bash
-        run: RUST_LOG=debug scripts/run_python_e2e_test.py --no-build # rerun-sdk is already built and installed
+        run: RUST_LOG=debug scripts/run_python_e2e_test.py --no-build # depthai-viewer is already built and installed
 
       - name: Unpack the wheel
         shell: bash
@@ -239,11 +239,11 @@ jobs:
         shell: bash
         # TODO(jleibs): figure out why tests are failing to complete on `x86_64-apple-darwin`
         # See: https://github.com/rerun-io/rerun/pull/1853
-        #matrix+=('{"platform": "macos",   "target": "aarch64-apple-darwin",   "run_tests": false, "runs_on": "macos-latest"          },') # NOTE: we can't run tests on arm since our macos runner is x86_64
-        #matrix+=('{"platform": "windows", "target": "x86_64-pc-windows-msvc", "run_tests": true,  "runs_on": "windows-latest-8-cores"},')
         run: |
           matrix=()
+          matrix+=('{"platform": "macos",   "target": "aarch64-apple-darwin",   "run_tests": false, "runs_on": "macos-latest"          },') # NOTE: we can't run tests on arm since our macos runner is x86_64
           matrix+=('{"platform": "macos",   "target": "x86_64-apple-darwin",    "run_tests": false,  "runs_on": "macos-latest"          },')
+          matrix+=('{"platform": "windows", "target": "x86_64-pc-windows-msvc", "run_tests": true,  "runs_on": "windows-latest-8-cores"},')
           echo "Matrix values: ${matrix[@]}"
 
           echo "matrix={\"include\":[${matrix[@]}]}" >> $GITHUB_OUTPUT
@@ -362,9 +362,9 @@ jobs:
         # TODO(jleibs): pull these deps from pyproject.toml
         shell: bash
         run: |
-          pip uninstall rerun-sdk
+          pip uninstall depthai-viewer
           pip install deprecated numpy>=1.23 pyarrow==10.0.1
-          pip install rerun-sdk==${{ env.expected_version }} --no-index --find-links pre-dist
+          pip install depthai-viewer==${{ env.expected_version }} --no-index --find-links pre-dist
 
       - name: Verify built wheel version
         if: ${{ matrix.run_tests }}
@@ -382,7 +382,7 @@ jobs:
       - name: Run e2e test
         if: ${{ matrix.run_tests }}
         shell: bash
-        run: RUST_LOG=debug scripts/run_python_e2e_test.py --no-build # rerun-sdk is already built and installed
+        run: RUST_LOG=debug scripts/run_python_e2e_test.py --no-build # depthai-viewer is already built and installed
 
       - name: Unpack the wheel
         shell: bash
