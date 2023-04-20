@@ -66,6 +66,8 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
         let mut device_config = self.ctx.depthai_state.device_config.config.clone();
         let mut depth = device_config.depth.unwrap_or_default();
         let mut update_device_config = false;
+        let available_size = ui.available_size();
+
         ui.add_enabled_ui(self.ctx.depthai_state.selected_device.id != "", |ui| {
             ui.vertical(|ui| {
                 ui.collapsing("Color Camera", |ui| {
@@ -497,6 +499,8 @@ pub(crate) struct SelectionPanel {
     magnetometer_history: History<[f32; 3]>,
     #[serde(skip)]
     start_time: instant::Instant,
+    #[serde(skip)]
+    current_device_config_panel_min_height: f32, // A bit hacky, used to keep the top panel from becoming really small after showing spinner
 }
 
 impl Default for SelectionPanel {
@@ -507,6 +511,7 @@ impl Default for SelectionPanel {
             gyro_history: History::new(0..1000, 5.0),
             magnetometer_history: History::new(0..1000, 5.0),
             start_time: instant::Instant::now(),
+            current_device_config_panel_min_height: 0.0,
         }
     }
 }
@@ -537,9 +542,13 @@ impl SelectionPanel {
             |ui: &mut egui::Ui| {
                 egui::TopBottomPanel::top("Device configuration")
                     .resizable(true)
+                    .min_height(self.current_device_config_panel_min_height)
                     .show_separator_line(true)
                     .frame(egui::Frame {
-                        inner_margin: egui::Margin::symmetric(re_ui::ReUi::view_padding(), 0.0),
+                        inner_margin: egui::Margin::symmetric(
+                            re_ui::ReUi::view_padding(),
+                            re_ui::ReUi::view_padding(),
+                        ),
                         ..Default::default()
                     })
                     .show_inside(ui, |ui| {
@@ -587,14 +596,23 @@ impl SelectionPanel {
                             });
 
                             if ctx.depthai_state.device_config.update_in_progress {
-                                ui.add_sized([ui.available_width(), 50.0], |ui: &mut egui::Ui| {
+                                ui.add_sized([ui.available_width(), 10.0], |ui: &mut egui::Ui| {
                                     ui.with_layout(
                                         egui::Layout::left_to_right(egui::Align::Center),
                                         |ui| ui.add(egui::Spinner::new()),
                                     )
                                     .response
                                 });
+                                // The following lines are a hack to force the top panel to resize to a usable size
+                                // after updating the device config, when updating set min height to 10 then detect if
+                                // it's 10 the config has been updated, set the panel to be of size 200.0, then in the next frame
+                                // set min height to 20.0 so user can still resize the panel to be very small
+                                self.current_device_config_panel_min_height = 10.0;
                                 return;
+                            } else if self.current_device_config_panel_min_height == 10.0 {
+                                self.current_device_config_panel_min_height = 200.0;
+                            } else {
+                                self.current_device_config_panel_min_height = 20.0;
                             }
                             DockArea::new(&mut self.depthai_tabs)
                                 .id(egui::Id::new("depthai_tabs"))
@@ -608,7 +626,7 @@ impl SelectionPanel {
                                         magnetometer_history: &mut self.magnetometer_history,
                                         now: self.start_time.elapsed().as_nanos() as f64 / 1e9,
                                     },
-                                );
+                                )
                         });
                     });
 
