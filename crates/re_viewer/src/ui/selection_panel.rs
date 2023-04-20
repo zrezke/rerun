@@ -51,13 +51,15 @@ struct DepthaiTabs<'a, 'b> {
     gyro_history: &'a mut History<[f32; 3]>,
     magnetometer_history: &'a mut History<[f32; 3]>,
     now: f64, // Time elapsed from spawning SelectionPanel
+    unsubscribe_from_imu: bool,
+    imu_visible: &'a mut bool,
 }
 
 impl<'a, 'b> DepthaiTabs<'a, 'b> {
     pub fn tree() -> Tree<String> {
         let config_tab = "Configuration".to_string();
-        let stats_tab = "Stats".to_string();
-        let tree = Tree::new(vec![config_tab, stats_tab]);
+        let imu_tab = "IMU".to_string();
+        let tree = Tree::new(vec![config_tab, imu_tab]);
         tree
     }
 
@@ -352,7 +354,7 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
         });
     }
 
-    fn stats_ui(&mut self, ui: &mut egui::Ui) {
+    fn imu_ui(&mut self, ui: &mut egui::Ui) {
         let imu_entity_path = &ImuData::entity_path();
 
         if let Ok(latest) = re_query::query_entity_with_primary::<ImuData>(
@@ -436,11 +438,12 @@ impl<'a, 'b> egui_dock::TabViewer for DepthaiTabs<'a, 'b> {
         match tab.as_str() {
             "Configuration" => {
                 // Unsubscribe from IMU data if subscribed
-                if self
-                    .ctx
-                    .depthai_state
-                    .subscriptions
-                    .contains(&depthai::ChannelId::ImuData)
+                if self.unsubscribe_from_imu
+                    && self
+                        .ctx
+                        .depthai_state
+                        .subscriptions
+                        .contains(&depthai::ChannelId::ImuData)
                 {
                     let mut subs = self
                         .ctx
@@ -462,7 +465,8 @@ impl<'a, 'b> egui_dock::TabViewer for DepthaiTabs<'a, 'b> {
                 }
                 self.device_configuration_ui(ui);
             }
-            "Stats" => {
+            "IMU" => {
+                *self.imu_visible = true;
                 // Subscribe to IMU data if not already subscribed
                 if !self
                     .ctx
@@ -474,7 +478,7 @@ impl<'a, 'b> egui_dock::TabViewer for DepthaiTabs<'a, 'b> {
                     subs.push(depthai::ChannelId::ImuData);
                     self.ctx.depthai_state.set_subscriptions(&subs);
                 }
-                self.stats_ui(ui);
+                self.imu_ui(ui);
             }
             _ => {}
         }
@@ -501,6 +505,8 @@ pub(crate) struct SelectionPanel {
     start_time: instant::Instant,
     #[serde(skip)]
     current_device_config_panel_min_height: f32, // A bit hacky, used to keep the top panel from becoming really small after showing spinner
+    #[serde(skip)]
+    imu_tab_visible: bool, // Used to subscribe to IMU data when the imu tab is shown, or rather unsubscribe when it's not (enables the user to view both the imu and the configuration at the same time)
 }
 
 impl Default for SelectionPanel {
@@ -512,6 +518,7 @@ impl Default for SelectionPanel {
             magnetometer_history: History::new(0..1000, 5.0),
             start_time: instant::Instant::now(),
             current_device_config_panel_min_height: 0.0,
+            imu_tab_visible: false,
         }
     }
 }
@@ -614,6 +621,8 @@ impl SelectionPanel {
                             } else {
                                 self.current_device_config_panel_min_height = 20.0;
                             }
+                            let mut imu_tab_visible = false;
+                            let unsubscribe_from_imu = !self.imu_tab_visible;
                             DockArea::new(&mut self.depthai_tabs)
                                 .id(egui::Id::new("depthai_tabs"))
                                 .style(re_ui::egui_dock_style(ui.style()))
@@ -625,8 +634,11 @@ impl SelectionPanel {
                                         gyro_history: &mut self.gyro_history,
                                         magnetometer_history: &mut self.magnetometer_history,
                                         now: self.start_time.elapsed().as_nanos() as f64 / 1e9,
+                                        unsubscribe_from_imu,
+                                        imu_visible: &mut imu_tab_visible,
                                     },
-                                )
+                                );
+                            self.imu_tab_visible = imu_tab_visible;
                         });
                     });
 
