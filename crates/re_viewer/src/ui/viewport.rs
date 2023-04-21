@@ -409,6 +409,28 @@ impl Viewport {
                 }
             }
         }
+
+        let possible_space_views = default_created_space_views(ctx, spaces_info);
+        let mut entity_paths_added = Vec::new();
+        for entity_path in ctx.depthai_state.new_auto_add_entity_paths.iter() {
+            for space_view in possible_space_views.iter().filter_map(|(space_view)| {
+                if space_view.data_blueprint.contains_entity(entity_path) {
+                    entity_paths_added.push(entity_path.clone());
+                    Some(space_view.clone())
+                } else {
+                    None
+                }
+            }) {
+                self.add_space_view(space_view);
+            }
+        }
+        ctx.depthai_state.new_auto_add_entity_paths = ctx
+            .depthai_state
+            .new_auto_add_entity_paths
+            .iter()
+            .filter(|ep| !entity_paths_added.contains(ep))
+            .cloned()
+            .collect_vec();
     }
 
     fn should_auto_add_space_view(&self, space_view_candidate: &SpaceView) -> bool {

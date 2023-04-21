@@ -244,7 +244,7 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                             self.ctx.depthai_state.set_device_config(&mut device_config);
                         }
                     },
-                )
+                );
             });
         });
     }
@@ -551,7 +551,7 @@ impl SelectionPanel {
                         .show_inside(ui, |ui| {
                             if let Some(selection) = ctx
                                 .rec_cfg
-                                .selection_stateLR
+                                .selection_state
                                 .selection_ui(ctx.re_ui, ui, blueprint)
                             {
                                 ctx.set_multi_selection(selection.iter().cloned());

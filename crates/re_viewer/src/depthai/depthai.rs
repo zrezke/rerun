@@ -366,6 +366,8 @@ pub struct State {
     poll_instant: Option<Instant>,
     #[serde(default = "default_neural_networks")]
     pub neural_networks: Vec<AiModel>,
+    #[serde(skip)]
+    pub new_auto_add_entity_paths: Vec<EntityPath>, // Used to force add space views when a new subscription appears
 }
 
 // Kind of dangerous, IMPORTANT: Make sure all ChannelId variants are covered
@@ -414,6 +416,7 @@ impl Default for State {
             backend_comms: BackendCommChannel::default(),
             poll_instant: Some(Instant::now()), // No default for Instant
             neural_networks: default_neural_networks(),
+            new_auto_add_entity_paths: Vec::new(),
         }
     }
 }
@@ -457,6 +460,36 @@ lazy_static! {
 }
 
 impl State {
+    /// Should the space view be added to the UI based on the new subscriptions (a subscription change occurred)
+    fn create_entity_paths_from_subscriptions(
+        &mut self,
+        new_subscriptions: Vec<ChannelId>,
+    ) -> Vec<EntityPath> {
+        let mut new_entity_paths = Vec::new();
+        for channel in new_subscriptions.iter() {
+            match channel {
+                ChannelId::ColorImage => {
+                    new_entity_paths.push(EntityPath::from("world/camera/image/rgb"));
+                }
+                ChannelId::LeftMono => {
+                    new_entity_paths.push(EntityPath::from("Left mono camera"));
+                }
+                ChannelId::RightMono => {
+                    new_entity_paths.push(EntityPath::from("Right mono camera"));
+                }
+                ChannelId::DepthImage => {
+                    new_entity_paths.push(EntityPath::from("right mono camera/depth"));
+                }
+                ChannelId::PointCloud => {
+                    new_entity_paths.push(EntityPath::from("world/point_cloud"));
+                }
+                _ => {}
+            }
+        }
+        new_entity_paths
+    }
+
+    /// Get the entities (the row in the blueprint tree ui) that should be removed based on UI (e.g. if depth is disabled, remove the depth image)
     pub fn entities_to_remove(&mut self, entity_path: &BTreeSet<EntityPath>) -> Vec<EntityPath> {
         let mut remove_channels = Vec::<ChannelId>::new();
         if let Some(depth) = self.applied_device_config.config.depth {
@@ -480,6 +513,7 @@ impl State {
             .collect_vec()
     }
 
+    /// Set subscriptions based on the visible UI
     pub fn set_subscriptions_from_space_views(&mut self, visible_space_views: Vec<&SpaceView>) {
         // If any bool in the vec is true, the channel is currently visible in the ui somewhere
         let mut visibilities = HashMap::<ChannelId, Vec<bool>>::from([
@@ -569,7 +603,6 @@ impl State {
             return;
         }
         self.backend_comms.set_subscriptions(subscriptions);
-        self.subscriptions = subscriptions.clone();
     }
 
     pub fn get_devices(&mut self) -> Vec<DeviceId> {
@@ -590,6 +623,13 @@ impl State {
             match ws_message.data {
                 WsMessageData::Subscriptions(subscriptions) => {
                     re_log::debug!("Setting subscriptions");
+                    self.new_auto_add_entity_paths = self.create_entity_paths_from_subscriptions(
+                        subscriptions
+                            .iter()
+                            .filter(|channel_id| !self.subscriptions.contains(channel_id))
+                            .cloned()
+                            .collect_vec(),
+                    );
                     self.subscriptions = subscriptions;
                 }
                 WsMessageData::Devices(devices) => {
