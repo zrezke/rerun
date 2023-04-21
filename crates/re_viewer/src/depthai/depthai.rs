@@ -13,6 +13,7 @@ use std::fmt;
 use std::sync::mpsc::channel;
 
 use strum::EnumIter;
+use strum::IntoEnumIterator;
 
 #[derive(serde::Deserialize, serde::Serialize, fmt::Debug, PartialEq, Clone, Copy, EnumIter)]
 #[allow(non_camel_case_types)]
@@ -370,18 +371,12 @@ pub struct State {
     pub new_auto_add_entity_paths: Vec<EntityPath>, // Used to force add space views when a new subscription appears
 }
 
-// Kind of dangerous, IMPORTANT: Make sure all ChannelId variants are covered
+#[inline]
 fn all_subscriptions() -> Vec<ChannelId> {
-    vec![
-        ChannelId::ColorImage,
-        ChannelId::LeftMono,
-        ChannelId::RightMono,
-        ChannelId::DepthImage,
-        ChannelId::PointCloud,
-        ChannelId::ImuData,
-    ]
+    ChannelId::iter().collect_vec()
 }
 
+#[inline]
 fn default_neural_networks() -> Vec<AiModel> {
     vec![
         AiModel::default(),
@@ -411,7 +406,7 @@ impl Default for State {
             selected_device: Device::default(),
             applied_device_config: DeviceConfigState::default(),
             modified_device_config: DeviceConfigState::default(),
-            subscriptions: all_subscriptions(),
+            subscriptions: ChannelId::iter().collect(),
             setting_subscriptions: false,
             backend_comms: BackendCommChannel::default(),
             poll_instant: Some(Instant::now()), // No default for Instant
@@ -422,7 +417,9 @@ impl Default for State {
 }
 
 #[repr(u8)]
-#[derive(serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq, Eq, fmt::Debug, Hash)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq, Eq, fmt::Debug, Hash, EnumIter,
+)]
 pub enum ChannelId {
     ColorImage,
     LeftMono,
@@ -499,6 +496,25 @@ impl State {
         } else {
             remove_channels.push(ChannelId::DepthImage);
         }
+        if !self
+            .applied_device_config
+            .config
+            .right_camera
+            .stream_enabled
+        {
+            remove_channels.push(ChannelId::RightMono);
+        }
+        if !self.applied_device_config.config.left_camera.stream_enabled {
+            remove_channels.push(ChannelId::LeftMono);
+        }
+        if !self
+            .applied_device_config
+            .config
+            .color_camera
+            .stream_enabled
+        {
+            remove_channels.push(ChannelId::ColorImage);
+        }
 
         entity_path
             .iter()
@@ -525,7 +541,7 @@ impl State {
         ]);
         // Fill in visibilities
         for space_view in visible_space_views.iter() {
-            let mut property_map = space_view.data_blueprint.data_blueprints_projected();
+            let property_map = space_view.data_blueprint.data_blueprints_projected();
             for entity_path in space_view.data_blueprint.entity_paths().iter() {
                 if let Some(channel_id) = DEPTHAI_ENTITY_HASHES.get(&entity_path.hash()) {
                     if let Some(visibility) = visibilities.get_mut(channel_id) {
@@ -581,7 +597,7 @@ impl State {
             .collect_vec();
 
         // Keep subscriptions that should be visible but have not yet been sent by the backend
-        for channel in all_subscriptions() {
+        for channel in ChannelId::iter() {
             if !subscriptions.contains(&channel)
                 && possible_subscriptions.contains(&channel)
                 && self.subscriptions.contains(&channel)
@@ -643,6 +659,15 @@ impl State {
                         if depth.pointcloud.enabled {
                             subs.push(ChannelId::PointCloud);
                         }
+                    }
+                    if config.color_camera.stream_enabled {
+                        subs.push(ChannelId::ColorImage);
+                    }
+                    if config.left_camera.stream_enabled {
+                        subs.push(ChannelId::LeftMono);
+                    }
+                    if config.right_camera.stream_enabled {
+                        subs.push(ChannelId::RightMono);
                     }
                     self.applied_device_config.config = config.clone();
                     self.modified_device_config.config = config;
