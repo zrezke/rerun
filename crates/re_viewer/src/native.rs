@@ -20,7 +20,7 @@ pub fn run_native_app(app_creator: AppCreator) -> eframe::Result<()> {
         transparent: re_ui::CUSTOM_WINDOW_DECORATIONS,
 
         follow_system_theme: false,
-        default_theme: eframe::Theme::Dark,
+        default_theme: eframe::Theme::Light,
 
         renderer: eframe::Renderer::Wgpu,
         wgpu_options: crate::wgpu_options(),

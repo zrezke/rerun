@@ -278,18 +278,35 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                         self.ctx.depthai_state.modified_device_config.config =
                             device_config.clone();
                         ui.horizontal(|ui| {
-                            ui.add_enabled_ui(
-                                device_config
-                                    != self.ctx.depthai_state.applied_device_config.config
-                                    && self.ctx.depthai_state.selected_device.id != "",
-                                |ui| {
+                            let apply_enabled = device_config
+                                != self.ctx.depthai_state.applied_device_config.config
+                                && !self.ctx.depthai_state.selected_device.id.is_empty();
+
+                            ui.add_enabled_ui(apply_enabled, |ui| {
+                                ui.scope(|ui| {
+                                    let mut style = ui.style_mut().clone();
+                                    if apply_enabled {
+                                        let color = self.ctx.re_ui.design_tokens.primary_bg_color;
+                                        let hover_color =
+                                            self.ctx.re_ui.design_tokens.primary_hover_bg_color;
+                                        style.visuals.widgets.hovered.bg_fill = hover_color;
+                                        style.visuals.widgets.hovered.weak_bg_fill = hover_color;
+                                        style.visuals.widgets.inactive.bg_fill = color;
+                                        style.visuals.widgets.inactive.weak_bg_fill = color;
+                                        style.visuals.widgets.inactive.fg_stroke.color =
+                                            egui::Color32::WHITE;
+                                        style.visuals.widgets.hovered.fg_stroke.color =
+                                            egui::Color32::WHITE;
+                                    }
+                                    style.spacing.button_padding = egui::Vec2::new(24.0, 2.0);
+                                    ui.set_style(style);
                                     if ui.button("Apply").clicked() {
                                         self.ctx
                                             .depthai_state
                                             .set_device_config(&mut device_config);
                                     }
-                                },
-                            );
+                                });
+                            });
                         });
                     });
                 });

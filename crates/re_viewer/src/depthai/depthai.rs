@@ -434,7 +434,7 @@ use lazy_static::lazy_static;
 lazy_static! {
     static ref DEPTHAI_ENTITY_HASHES: HashMap<EntityPathHash, ChannelId> = HashMap::from([
         (
-            EntityPath::from("world/camera/image/rgb").hash(),
+            EntityPath::from("world/camera/image/Color camera").hash(),
             ChannelId::ColorImage,
         ),
         (
@@ -446,11 +446,11 @@ lazy_static! {
             ChannelId::RightMono,
         ),
         (
-            EntityPath::from("right mono camera/depth").hash(),
+            EntityPath::from("world/camera/image/Depth").hash(),
             ChannelId::DepthImage,
         ),
         (
-            EntityPath::from("world/point_cloud").hash(),
+            EntityPath::from("world/camera/Point Cloud").hash(),
             ChannelId::PointCloud,
         ),
     ]);
@@ -460,13 +460,13 @@ impl State {
     /// Should the space view be added to the UI based on the new subscriptions (a subscription change occurred)
     fn create_entity_paths_from_subscriptions(
         &mut self,
-        new_subscriptions: Vec<ChannelId>,
+        new_subscriptions: &Vec<ChannelId>,
     ) -> Vec<EntityPath> {
         let mut new_entity_paths = Vec::new();
         for channel in new_subscriptions.iter() {
             match channel {
                 ChannelId::ColorImage => {
-                    new_entity_paths.push(EntityPath::from("world/camera/image/rgb"));
+                    new_entity_paths.push(EntityPath::from("world/camera/image/Color camera"));
                 }
                 ChannelId::LeftMono => {
                     new_entity_paths.push(EntityPath::from("Left mono camera"));
@@ -475,10 +475,10 @@ impl State {
                     new_entity_paths.push(EntityPath::from("Right mono camera"));
                 }
                 ChannelId::DepthImage => {
-                    new_entity_paths.push(EntityPath::from("right mono camera/depth"));
+                    new_entity_paths.push(EntityPath::from("world/camera/image/Depth"));
                 }
                 ChannelId::PointCloud => {
-                    new_entity_paths.push(EntityPath::from("world/point_cloud"));
+                    new_entity_paths.push(EntityPath::from("world/camera/Point Cloud"));
                 }
                 _ => {}
             }
@@ -619,6 +619,7 @@ impl State {
             return;
         }
         self.backend_comms.set_subscriptions(subscriptions);
+        self.subscriptions = subscriptions.clone();
     }
 
     pub fn get_devices(&mut self) -> Vec<DeviceId> {
@@ -640,7 +641,7 @@ impl State {
                 WsMessageData::Subscriptions(subscriptions) => {
                     re_log::debug!("Setting subscriptions");
                     self.new_auto_add_entity_paths = self.create_entity_paths_from_subscriptions(
-                        subscriptions
+                        &subscriptions
                             .iter()
                             .filter(|channel_id| !self.subscriptions.contains(channel_id))
                             .cloned()

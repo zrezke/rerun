@@ -24,7 +24,7 @@ pub async fn start(
 
     let web_options = eframe::WebOptions {
         follow_system_theme: false,
-        default_theme: eframe::Theme::Dark,
+        default_theme: eframe::Theme::Light,
         wgpu_options: crate::wgpu_options(),
     };
 
