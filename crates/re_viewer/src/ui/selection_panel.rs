@@ -262,7 +262,7 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                         ui.vertical(|ui| {
                             ui.label("AI Model:");
                             egui::ComboBox::from_id_source("ai_model_selection")
-                                .width(70.0)
+                                .width(120.0)
                                 .selected_text(format!("{}", device_config.ai_model.display_name))
                                 .show_ui(ui, |ui| {
                                     for nn in self.ctx.depthai_state.neural_networks.iter() {
