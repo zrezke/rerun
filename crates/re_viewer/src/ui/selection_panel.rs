@@ -465,6 +465,8 @@ pub(crate) struct SelectionPanel {
     #[serde(skip)]
     current_device_config_panel_min_height: f32, // A bit hacky, used to keep the top panel from becoming really small after showing spinner
     #[serde(skip)]
+    device_config_panel_height: f32, // Used to reset height to previous height after config load
+    #[serde(skip)]
     imu_tab_visible: bool, // Used to subscribe to IMU data when the imu tab is shown, or rather unsubscribe when it's not (enables the user to view both the imu and the configuration at the same time)
     #[serde(skip)]
     apply_cfg_button_enabled: bool, // Used to disable the apply button when the config has changed, keeps the state between frames
@@ -479,6 +481,7 @@ impl Default for SelectionPanel {
             magnetometer_history: History::new(0..1000, 5.0),
             start_time: instant::Instant::now(),
             current_device_config_panel_min_height: 0.0,
+            device_config_panel_height: 500.0,
             imu_tab_visible: false,
             apply_cfg_button_enabled: false,
         }
@@ -509,7 +512,7 @@ impl SelectionPanel {
             ui,
             blueprint.selection_panel_expanded,
             |ui: &mut egui::Ui| {
-                egui::TopBottomPanel::top("Device configuration")
+                let response_rect = egui::TopBottomPanel::top("Device configuration")
                     .resizable(true)
                     .min_height(self.current_device_config_panel_min_height)
                     .show_separator_line(true)
@@ -579,7 +582,8 @@ impl SelectionPanel {
                                 self.current_device_config_panel_min_height = 10.0;
                                 return;
                             } else if self.current_device_config_panel_min_height == 10.0 {
-                                self.current_device_config_panel_min_height = 200.0;
+                                self.current_device_config_panel_min_height =
+                                    self.device_config_panel_height;
                             } else {
                                 self.current_device_config_panel_min_height = 20.0;
                             }
@@ -603,7 +607,13 @@ impl SelectionPanel {
                                 );
                             self.imu_tab_visible = imu_tab_visible;
                         });
-                    });
+                    })
+                    .response
+                    .rect;
+                // When panel isn't small keep remembering the height of the panel
+                if self.current_device_config_panel_min_height != 10.0 {
+                    self.device_config_panel_height = (response_rect.max - response_rect.min).y;
+                }
 
                 egui::CentralPanel::default().show_inside(ui, |ui| {
                     egui::TopBottomPanel::top("selection_panel_title_bar")
