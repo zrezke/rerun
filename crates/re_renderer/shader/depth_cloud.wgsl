@@ -53,6 +53,10 @@ var<uniform> depth_cloud_info: DepthCloudInfo;
 @group(1) @binding(1)
 var depth_texture: texture_2d<f32>;
 
+/// Only sampled if `DepthCloudInfo::colormap == 100`.
+@group(1) @binding(2)
+var albedo_texture: texture_2d<f32>;
+
 struct VertexOut {
     @builtin(position)
     pos_in_clip: Vec4,
@@ -90,11 +94,21 @@ fn compute_point_data(quad_idx: u32) -> PointData {
     let world_space_depth = depth_cloud_info.world_depth_from_texture_value * textureLoad(depth_texture, texcoords, 0).x;
 
     var data: PointData;
-
     if 0.0 < world_space_depth && world_space_depth < f32max {
         // TODO(cmc): albedo textures
-        let color = Vec4(colormap_linear(depth_cloud_info.colormap, world_space_depth / depth_cloud_info.max_depth_in_world), 1.0);
+        // let color = Vec4(colormap_linear(depth_cloud_info.colormap, world_space_depth / depth_cloud_info.max_depth_in_world), 1.0);
 
+        var color: Vec4;
+        if depth_cloud_info.colormap == ALBEDO_TEXTURE {
+            color = textureSampleLevel(
+                albedo_texture,
+                trilinear_sampler,
+                Vec2(texcoords) / Vec2(textureDimensions(albedo_texture)),
+                0.0
+            );
+        } else {
+            color = Vec4(colormap_srgb(depth_cloud_info.colormap, world_space_depth), 1.0);
+        }
         // TODO(cmc): This assumes a pinhole camera; need to support other kinds at some point.
         let intrinsics = depth_cloud_info.depth_camera_intrinsics;
         let focal_length = Vec2(intrinsics[0][0], intrinsics[1][1]);

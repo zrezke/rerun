@@ -9,7 +9,7 @@ use re_log_types::{
 };
 use re_query::{query_primary_with_history, EntityView, QueryError};
 use re_renderer::{
-    renderer::{DepthCloud, RectangleOptions},
+    renderer::{DepthCloud, DepthCloudAlbedoData, RectangleOptions},
     resource_managers::Texture2DCreationDesc,
     Colormap, OutlineMaskPreference,
 };
@@ -328,7 +328,7 @@ impl ImagesPart {
 
         let world_depth_from_texture_depth = 1.0 / depth_from_world_scale;
 
-        let colormap = match *properties.color_mapper.get() {
+        let mut colormap = match *properties.color_mapper.get() {
             re_data_store::ColorMapper::Colormap(colormap) => match colormap {
                 re_data_store::Colormap::Grayscale => Colormap::Grayscale,
                 re_data_store::Colormap::Turbo => Colormap::Turbo,
@@ -337,7 +337,43 @@ impl ImagesPart {
                 re_data_store::Colormap::Magma => Colormap::Magma,
                 re_data_store::Colormap::Inferno => Colormap::Inferno,
             },
+            re_data_store::ColorMapper::AlbedoTexture => Colormap::AlbedoTexture,
         };
+
+        let mut albedo_data = None;
+        let mut albedo_dimensions = glam::UVec2::ZERO;
+
+        if colormap == Colormap::AlbedoTexture {
+            let tensor = properties.albedo_texture.as_ref().and_then(|path| {
+                query_latest_single::<Tensor>(&ctx.log_db.entity_db, path, &ctx.current_query())
+            });
+            if let Some(tensor) = tensor {
+                let (h, w) = (tensor.shape()[0].size, tensor.shape()[1].size);
+                albedo_dimensions = glam::UVec2::new(w as _, h as _);
+
+                // TODO(cmc): How does one know whether the texture is sRGB or not at this point?
+                // TODO(cmc): We should easily be able to pass almost any datatype here.
+
+                albedo_data = match &tensor.data {
+                    // TODO: check shape to know whether we have alpha
+                    // TODO: just go through image cache
+                    TensorData::U8(data) => Some(DepthCloudAlbedoData::Rgb8Srgb(data.0.to_vec())),
+                    _ => {
+                        re_log::warn_once!(
+                            "Tensor datatype not supported for albedo texture ({:?})",
+                            std::mem::discriminant(&tensor.data),
+                        );
+                        None
+                    }
+                };
+            } else {
+                re_log::warn_once!(
+                    "Albedo texture couldn't be fetched ({:?})",
+                    properties.albedo_texture
+                );
+                colormap = Colormap::Grayscale;
+            }
+        }
 
         // We want point radius to be defined in a scale where the radius of a point
         // is a factor (`backproject_radius_scale`) of the diameter of a pixel projected
@@ -370,6 +406,8 @@ impl ImagesPart {
             colormap,
             outline_mask_id: entity_highlight.overall,
             picking_object_id: re_renderer::PickingLayerObjectId(ent_path.hash64()),
+            albedo_data,
+            albedo_dimensions,
         });
 
         Ok(())

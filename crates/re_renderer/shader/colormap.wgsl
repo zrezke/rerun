@@ -8,7 +8,7 @@ const COLORMAP_MAGMA:     u32 = 3u;
 const COLORMAP_PLASMA:    u32 = 4u;
 const COLORMAP_TURBO:     u32 = 5u;
 const COLORMAP_VIRIDIS:   u32 = 6u;
-
+const ALBEDO_TEXTURE:     u32 = 7u;
 /// Returns a gamma-space sRGB in 0-1 range.
 ///
 /// The input will be saturated to [0, 1] range.
