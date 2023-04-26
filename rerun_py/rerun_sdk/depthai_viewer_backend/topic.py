@@ -3,9 +3,7 @@ from typing import Union
 
 
 class Topic(Enum):
-    """
-    All topics that can be subscribed to
-    """
+    """All topics that can be subscribed to."""
 
     ColorImage = 0
     LeftMono = 1

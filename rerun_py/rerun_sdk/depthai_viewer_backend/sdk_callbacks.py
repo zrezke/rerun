@@ -1,13 +1,16 @@
 from typing import Callable, Dict, List, Tuple, Union
-from ahrs.filters import Mahony
-from . import classification_labels
-import numpy as np
-from depthai_sdk import FramePacket
-from .store import Store
-from depthai_sdk.classes.packets import DetectionPacket, TwoStagePacket, PointcloudPacket, IMUPacket
-from .topic import Topic
+
 import cv2
+import depthai as dai
+import numpy as np
+from ahrs.filters import Mahony
+from depthai_sdk import FramePacket
+from depthai_sdk.classes.packets import DetectionPacket, IMUPacket, PointcloudPacket, TwoStagePacket
+
 import rerun as rr
+from depthai_viewer_backend import classification_labels
+from depthai_viewer_backend.store import Store
+from depthai_viewer_backend.topic import Topic
 from rerun.components.rect2d import RectFormat
 
 
@@ -43,7 +46,6 @@ class SdkCallbacks:
             gyro: dai.IMUReportGyroscope = data.gyroscope
             accel: dai.IMUReportAccelerometer = data.acceleroMeter
             mag: dai.IMUReportMagneticField = data.magneticField
-            rot: dai.IMUReportRotationVectorWAcc = data.rotationVector
             # TODO(filip): Move coordinate mapping to sdk
             self.ahrs.Q = self.ahrs.updateIMU(
                 self.ahrs.Q, np.array([gyro.z, gyro.x, gyro.y]), np.array([accel.z, accel.x, accel.y])
