@@ -1,6 +1,7 @@
 use re_log_types::LogMsg;
 
 use crate::APPLICATION_NAME;
+use pyo3::prelude::*;
 
 type AppCreator =
     Box<dyn FnOnce(&eframe::CreationContext<'_>, re_ui::ReUi) -> Box<dyn eframe::App>>;

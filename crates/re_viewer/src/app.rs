@@ -101,9 +101,47 @@ pub struct App {
     analytics: ViewerAnalytics,
 
     icon_status: AppIconStatus,
+
+    #[cfg(not(target_arch = "wasm32"))]
+    backend_handle: std::process::Child,
 }
 
 impl App {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn_backend() -> std::process::Child {
+        // TODO(filip): Is there some way I can know for sure where depthai_viewer_backend is?
+        let backend_handle = match std::process::Command::new("python")
+            .args(["-m", "depthai_viewer_backend"])
+            .spawn()
+        {
+            Ok(child) => {
+                println!("Backend started successfully.");
+                Some(child)
+            }
+            Err(e) => {
+                eprintln!("Failed to start depthai viewer: {e}");
+                match std::process::Command::new("python3")
+                    .args(["-m", "depthai_viewer_backend"])
+                    .spawn()
+                {
+                    Ok(child) => {
+                        println!("Backend started successfully.");
+                        Some(child)
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to start depthai_viewer {e}");
+                        None
+                    }
+                }
+            }
+        };
+        assert!(
+            backend_handle.is_some(),
+            "Couldn't start backend, exiting..."
+        );
+        backend_handle.unwrap()
+    }
+
     /// Create a viewer that receives new log messages over time
     pub fn from_receiver(
         build_info: re_build_info::BuildInfo,
@@ -159,6 +197,8 @@ impl App {
             analytics,
 
             icon_status: AppIconStatus::NotSetTryAgain,
+            #[cfg(not(target_arch = "wasm32"))]
+            backend_handle: App::spawn_backend(),
         }
     }
 
@@ -266,6 +306,7 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             Command::Quit => {
                 self.state.depthai_state.shutdown();
+                self.backend_handle.kill();
                 _frame.close();
             }
 
@@ -431,6 +472,7 @@ impl eframe::App for App {
     #[cfg(not(target_arch = "wasm32"))]
     fn on_close_event(&mut self) -> bool {
         self.state.depthai_state.shutdown();
+        self.backend_handle.kill();
         true
     }
 
@@ -456,6 +498,7 @@ impl eframe::App for App {
         if self.shutdown.load(std::sync::atomic::Ordering::Relaxed) {
             self.state.depthai_state.shutdown();
             #[cfg(not(target_arch = "wasm32"))]
+            self.backend_handle.kill();
             frame.close();
             return;
         }
