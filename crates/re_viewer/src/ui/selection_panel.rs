@@ -1,13 +1,14 @@
 use egui::{
-    plot::{Line, Plot, PlotPoint, PlotPoints},
+    plot::{Line, Plot, PlotPoints},
     NumExt as _,
 };
-use itertools::Itertools;
-use re_arrow_store::{LatestAtQuery, TimeInt, TimeRange, Timeline};
 use re_data_store::{
     query_latest_single, ColorMapper, Colormap, EditableAutoValue, EntityPath, EntityProperties,
     ExtraQueryHistory,
 };
+
+use itertools::Itertools;
+use re_arrow_store::{LatestAtQuery, TimeInt, TimeRange, Timeline};
 use re_log_types::{
     component_types::{ImuData, InstanceKey, Tensor, TensorDataMeaning},
     Component, TimeType, Transform,
@@ -989,35 +990,87 @@ fn entity_props_ui(
         });
 }
 
-fn colormap_props_ui(ui: &mut egui::Ui, entity_props: &mut EntityProperties) {
-    let current = *entity_props.color_mapper.get();
+fn colormap_props_ui(
+    ctx: &mut ViewerContext<'_>,
+    ui: &mut egui::Ui,
+    entity_path: &EntityPath,
+    entity_props: &mut EntityProperties,
+) {
+    // Color mapping picker
+    {
+        let current = *entity_props.color_mapper.get();
+        ui.label("Color map");
+        egui::ComboBox::from_id_source("depth_color_mapper")
+            .selected_text(current.to_string())
+            .show_ui(ui, |ui| {
+                ui.style_mut().wrap = Some(false);
+                ui.set_min_width(64.0);
 
-    ui.label("Color map");
-    egui::ComboBox::from_id_source("color_mapper")
-        .selected_text(current.to_string())
-        .show_ui(ui, |ui| {
+                let mut add_label = |proposed| {
+                    if ui
+                        .selectable_label(current == proposed, proposed.to_string())
+                        .clicked()
+                    {
+                        entity_props.color_mapper = EditableAutoValue::Auto(proposed);
+                    }
+                };
+
+                // TODO: that is not ideal but I don't want to import yet another proc-macro...
+                add_label(ColorMapper::Colormap(Colormap::Grayscale));
+                add_label(ColorMapper::Colormap(Colormap::Turbo));
+                add_label(ColorMapper::Colormap(Colormap::Viridis));
+                add_label(ColorMapper::Colormap(Colormap::Plasma));
+                add_label(ColorMapper::Colormap(Colormap::Magma));
+                add_label(ColorMapper::Colormap(Colormap::Inferno));
+                add_label(ColorMapper::AlbedoTexture);
+            });
+        ui.end_row();
+    }
+
+    if *entity_props.color_mapper.get() != ColorMapper::AlbedoTexture {
+        return;
+    }
+
+    // Albedo texture picker
+    if let Some(tree) = entity_path
+        .parent()
+        .and_then(|path| ctx.log_db.entity_db.tree.subtree(&path))
+    {
+        let query = ctx.current_query();
+        let current = entity_props.albedo_texture.clone();
+
+        ui.label("Albedo texture");
+
+        let mut combo = egui::ComboBox::from_id_source("depth_color_texture");
+        if let Some(current) = current.as_ref() {
+            combo = combo.selected_text(current.to_string());
+        } else {
+            combo = combo.selected_text("(empty)");
+        }
+
+        combo.show_ui(ui, |ui| {
             ui.style_mut().wrap = Some(false);
             ui.set_min_width(64.0);
 
-            // TODO(cmc): that is not ideal but I don't want to import yet another proc-macro...
-            let mut add_label = |proposed| {
-                if ui
-                    .selectable_label(current == proposed, proposed.to_string())
-                    .clicked()
+            tree.visit_children_recursively(&mut |ent_path| {
+                let Some(tensor) = query_latest_single::<Tensor>(
+                    &ctx.log_db.entity_db,
+                    ent_path,
+                    &query,
+                ) else {
+                    return;
+                };
+
+                if tensor.is_shaped_like_an_image()
+                    && ui
+                        .selectable_label(current.as_ref() == Some(ent_path), ent_path.to_string())
+                        .clicked()
                 {
-                    entity_props.color_mapper = EditableAutoValue::Auto(proposed);
+                    entity_props.albedo_texture = Some(ent_path.clone());
                 }
-            };
-
-            add_label(ColorMapper::Colormap(Colormap::Grayscale));
-            add_label(ColorMapper::Colormap(Colormap::Turbo));
-            add_label(ColorMapper::Colormap(Colormap::Viridis));
-            add_label(ColorMapper::Colormap(Colormap::Plasma));
-            add_label(ColorMapper::Colormap(Colormap::Magma));
-            add_label(ColorMapper::Colormap(Colormap::Inferno));
+            });
         });
-
-    ui.end_row();
+    }
 }
 
 fn pinhole_props_ui(
@@ -1090,9 +1143,25 @@ fn depth_props_ui(
 
         backproject_radius_scale_ui(ui, &mut entity_props.backproject_radius_scale);
 
+        ui.label("Backproject radius scale");
+        let mut radius_scale = *entity_props.backproject_radius_scale.get();
+        let speed = (radius_scale * 0.001).at_least(0.001);
+        if ui
+            .add(
+                egui::DragValue::new(&mut radius_scale)
+                    .clamp_range(0.0..=1.0e8)
+                    .speed(speed),
+            )
+            .on_hover_text("Scales the radii of the points in the backprojected point cloud")
+            .changed()
+        {
+            entity_props.backproject_radius_scale = EditableAutoValue::UserEdited(radius_scale);
+        }
+        ui.end_row();
+
         // TODO(cmc): This should apply to the depth map entity as a whole, but for that we
         // need to get the current hardcoded colormapping out of the image cache first.
-        colormap_props_ui(ui, entity_props);
+        colormap_props_ui(ctx, ui, entity_path, entity_props);
     }
 
     Some(())
@@ -1102,6 +1171,7 @@ fn depth_from_world_scale_ui(ui: &mut egui::Ui, property: &mut EditableAutoValue
     ui.label("Backproject meter");
     let mut value = *property.get();
     let speed = (value * 0.05).at_least(0.01);
+
     let response = ui
     .add(
         egui::DragValue::new(&mut value)

@@ -182,6 +182,8 @@ impl RenderDepthClouds {
                     colormap: re_renderer::Colormap::Turbo,
                     outline_mask_id: Default::default(),
                     picking_object_id: Default::default(),
+                    albedo_dimensions: glam::UVec2::ZERO,
+                    albedo_data: None,
                 }],
                 radius_boost_in_ui_points_for_outlines: 2.5,
             },
