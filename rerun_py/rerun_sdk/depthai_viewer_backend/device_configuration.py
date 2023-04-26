@@ -6,7 +6,9 @@ from depthai_sdk.previews import Previews as QueueNames
 
 class ColorCameraConfiguration(BaseModel):
     fps: Optional[int] = 30
-    resolution: Optional[dai.ColorCameraProperties.SensorResolution] = dai.ColorCameraProperties.SensorResolution.THE_1080_P
+    resolution: Optional[
+        dai.ColorCameraProperties.SensorResolution
+    ] = dai.ColorCameraProperties.SensorResolution.THE_1080_P
     board_socket: Optional[dai.CameraBoardSocket] = dai.CameraBoardSocket.RGB
     out_preview: bool = False
     xout_still: bool = False
@@ -23,11 +25,9 @@ class ColorCameraConfiguration(BaseModel):
 
     def __init__(self, **v):
         if v.get("resolution"):
-            v["resolution"] = getattr(
-                dai.ColorCameraProperties.SensorResolution, v["resolution"])
+            v["resolution"] = getattr(dai.ColorCameraProperties.SensorResolution, v["resolution"])
         if v.get("board_socket"):
-            v["board_socket"] = getattr(
-                dai.CameraBoardSocket, v["board_socket"])
+            v["board_socket"] = getattr(dai.CameraBoardSocket, v["board_socket"])
         return super().__init__(**v)
 
     @property
@@ -41,11 +41,14 @@ class ColorCameraConfiguration(BaseModel):
         if self.xout_video:
             return prefix + "_video"
 
+
 class MonoCameraConfiguration(BaseModel):
     fps: Optional[int] = 30
-    resolution: Optional[dai.MonoCameraProperties.SensorResolution] = dai.MonoCameraProperties.SensorResolution.THE_400_P
+    resolution: Optional[
+        dai.MonoCameraProperties.SensorResolution
+    ] = dai.MonoCameraProperties.SensorResolution.THE_400_P
     board_socket: Optional[dai.CameraBoardSocket] = dai.CameraBoardSocket.LEFT
-    xout: bool = False # Depth queue fails if I create this queue!
+    xout: bool = False  # Depth queue fails if I create this queue!
     input_control: bool = False
 
     class Config:
@@ -58,11 +61,9 @@ class MonoCameraConfiguration(BaseModel):
 
     def __init__(self, **v):
         if v.get("resolution"):
-            v["resolution"] = getattr(
-                dai.MonoCameraProperties.SensorResolution, v["resolution"])
+            v["resolution"] = getattr(dai.MonoCameraProperties.SensorResolution, v["resolution"])
         if v.get("board_socket"):
-            v["board_socket"] = getattr(
-                dai.CameraBoardSocket, v["board_socket"])
+            v["board_socket"] = getattr(dai.CameraBoardSocket, v["board_socket"])
         return super().__init__(**v)
 
     @property
@@ -72,10 +73,11 @@ class MonoCameraConfiguration(BaseModel):
     @classmethod
     def create_left(cls, **kwargs):
         return cls(board_socket="LEFT", **kwargs)
-    
+
     @classmethod
     def create_right(cls, **kwargs):
         return cls(board_socket="RIGHT", **kwargs)
+
 
 class PointcloudConfiguration(BaseModel):
     enabled: bool = True
@@ -104,9 +106,9 @@ class DepthConfiguration(BaseModel):
 
     def requires_rebuild(self, other: "DepthConfiguration") -> bool:
         dont_require_rebuild = {"lrc_threshold", "sigma", "dct", "median"}
-        return len(dont_require_rebuild - self._get_modified_fileds(other)) != 0
+        return len(dont_require_rebuild - self._get_modified_fields(other)) != 0
 
-    def _get_modified_fileds(self, other: "DepthConfiguration") -> set[str]:
+    def _get_modified_fields(self, other: "DepthConfiguration") -> set[str]:
         fields = set()
         if self.dct != other.dct:
             fields.add("dct")
@@ -125,7 +127,7 @@ class DepthConfiguration(BaseModel):
         if self.sigma != other.sigma:
             fields.add("sigma")
         return fields
-    
+
     @property
     def out_queue_name(self) -> str:
         return QueueNames.depthRaw.name

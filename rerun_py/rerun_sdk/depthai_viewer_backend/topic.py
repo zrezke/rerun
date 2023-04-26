@@ -1,10 +1,12 @@
 from enum import Enum
 from typing import Union
 
+
 class Topic(Enum):
     """
     All topics that can be subscribed to
     """
+
     ColorImage = 0
     LeftMono = 1
     RightMono = 2

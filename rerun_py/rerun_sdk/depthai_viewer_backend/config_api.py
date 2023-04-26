@@ -49,8 +49,7 @@ async def ws_api(websocket: WebSocketServerProtocol):
             success, message = dispatch_action(Action.RESET)
             if success:
                 return
-            raise Exception(
-                "Couldn't reset backend after websocket disconnect!")
+            raise Exception("Couldn't reset backend after websocket disconnect!")
 
         if message:
             try:
@@ -65,31 +64,43 @@ async def ws_api(websocket: WebSocketServerProtocol):
             print("Got message: ", message)
             if message_type == MessageType.SUBSCRIPTIONS:
                 data = message.get("data", {})
-                subscriptions = [Topic.create(topic_name) for topic_name in data.get(
-                    MessageType.SUBSCRIPTIONS, [])]
-                dispatch_action(Action.SET_SUBSCRIPTIONS,
-                                subscriptions=subscriptions)
+                subscriptions = [Topic.create(topic_name) for topic_name in data.get(MessageType.SUBSCRIPTIONS, [])]
+                dispatch_action(Action.SET_SUBSCRIPTIONS, subscriptions=subscriptions)
                 print("Subscriptions: ", subscriptions)
-                active_subscriptions = [topic.name for topic in dispatch_action(
-                    Action.GET_SUBSCRIPTIONS) if topic]
+                active_subscriptions = [topic.name for topic in dispatch_action(Action.GET_SUBSCRIPTIONS) if topic]
                 await websocket.send(json.dumps({"type": MessageType.SUBSCRIPTIONS, "data": active_subscriptions}))
             elif message_type == MessageType.PIPELINE:
                 data = message.get("data", {})
-                pipeline_config = PipelineConfiguration(
-                    **data.get("Pipeline", {}))
+                pipeline_config = PipelineConfiguration(**data.get("Pipeline", {}))
                 print("Pipeline config: ", pipeline_config)
 
-                success, result = dispatch_action(Action.UPDATE_PIPELINE,
-                                                  pipeline_config=pipeline_config)
+                success, result = dispatch_action(Action.UPDATE_PIPELINE, pipeline_config=pipeline_config)
                 if success:
-                    active_config: PipelineConfiguration = dispatch_action(
-                        Action.GET_PIPELINE)
+                    active_config: PipelineConfiguration = dispatch_action(Action.GET_PIPELINE)
                     print("Active config: ", active_config)
-                    await websocket.send(json.dumps({"type": MessageType.PIPELINE, "data": active_config.to_json() if active_config else None}))
+                    await websocket.send(
+                        json.dumps(
+                            {"type": MessageType.PIPELINE, "data": active_config.to_json() if active_config else None}
+                        )
+                    )
                 else:
-                    await websocket.send(json.dumps({"type": MessageType.ERROR, "data": {"action": "FullReset", "message": result.get("message", "Unknown error")}}))
+                    await websocket.send(
+                        json.dumps(
+                            {
+                                "type": MessageType.ERROR,
+                                "data": {"action": "FullReset", "message": result.get("message", "Unknown error")},
+                            }
+                        )
+                    )
             elif message_type == MessageType.DEVICES:
-                await websocket.send(json.dumps({"type": MessageType.DEVICES, "data": [d.getMxId() for d in dai.Device.getAllAvailableDevices()]}))
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": MessageType.DEVICES,
+                            "data": [d.getMxId() for d in dai.Device.getAllAvailableDevices()],
+                        }
+                    )
+                )
 
             elif message_type == MessageType.DEVICE:
                 data = message.get("data", {})
@@ -98,14 +109,21 @@ async def ws_api(websocket: WebSocketServerProtocol):
                 if device_id is None:
                     print("Missing device id")
                     continue
-                success, result = dispatch_action(
-                    Action.SELECT_DEVICE, device_id=device_id)
+                success, result = dispatch_action(Action.SELECT_DEVICE, device_id=device_id)
                 if success:
-                    print("Selected device properties: ",
-                          result.get("device_properties", None))
-                    await websocket.send(json.dumps({"type": MessageType.DEVICE, "data": result.get("device_properties", {})}))
+                    print("Selected device properties: ", result.get("device_properties", None))
+                    await websocket.send(
+                        json.dumps({"type": MessageType.DEVICE, "data": result.get("device_properties", {})})
+                    )
                 else:
-                    await websocket.send(json.dumps({"type": MessageType.ERROR, "data": {"action": "FullReset", "message": result.get("message", "Unknown error")}}))
+                    await websocket.send(
+                        json.dumps(
+                            {
+                                "type": MessageType.ERROR,
+                                "data": {"action": "FullReset", "message": result.get("message", "Unknown error")},
+                            }
+                        )
+                    )
 
             else:
                 print("Unknown message type: ", message_type)

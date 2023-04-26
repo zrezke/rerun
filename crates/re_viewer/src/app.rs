@@ -118,8 +118,8 @@ impl App {
                 println!("Backend started successfully.");
                 Some(child)
             }
-            Err(e) => {
-                eprintln!("Failed to start depthai viewer: {e}");
+            Err(err) => {
+                eprintln!("Failed to start depthai viewer: {err}");
                 match std::process::Command::new("python3")
                     .args(["-m", "depthai_viewer_backend"])
                     .spawn()
@@ -128,8 +128,8 @@ impl App {
                         println!("Backend started successfully.");
                         Some(child)
                     }
-                    Err(e) => {
-                        eprintln!("Failed to start depthai_viewer {e}");
+                    Err(err) => {
+                        eprintln!("Failed to start depthai_viewer {err}");
                         None
                     }
                 }

@@ -1,20 +1,21 @@
 import json
-from queue import Queue
+import threading
 from queue import Empty as QueueEmptyException
-from .config_api import start_api
-import depthai as dai
-from .device_configuration import PipelineConfiguration
+from queue import Queue
 from typing import Dict, Tuple
-from .store import Store
-from .topic import *
+
+import depthai as dai
+import numpy as np
 from depthai_sdk import OakCamera
-from depthai_sdk.oak_camera import CameraComponent
 from depthai_sdk.components import NNComponent
 from depthai_sdk.components.pointcloud_component import PointcloudComponent
-import threading
-from .sdk_callbacks import SdkCallbacks
-import numpy as np
+from depthai_sdk.oak_camera import CameraComponent
 
+from .config_api import start_api
+from .device_configuration import PipelineConfiguration
+from .sdk_callbacks import SdkCallbacks
+from .store import Store
+from .topic import *
 
 color_wh_to_enum = {
     (1280, 720): dai.ColorCameraProperties.SensorResolution.THE_720_P,
@@ -24,7 +25,7 @@ color_wh_to_enum = {
     (4056, 3040): dai.ColorCameraProperties.SensorResolution.THE_12_MP,
     (1440, 1080): dai.ColorCameraProperties.SensorResolution.THE_1440X1080,
     (5312, 6000): dai.ColorCameraProperties.SensorResolution.THE_5312X6000,
-    # TODO: Add other resolutions
+    # TODO(filip): Add other resolutions
 }
 
 mono_wh_to_enum = {
@@ -32,7 +33,7 @@ mono_wh_to_enum = {
     (640, 480): dai.MonoCameraProperties.SensorResolution.THE_480_P,
     (1280, 720): dai.MonoCameraProperties.SensorResolution.THE_720_P,
     (1280, 800): dai.MonoCameraProperties.SensorResolution.THE_800_P,
-    (1920, 1200): dai.MonoCameraProperties.SensorResolution.THE_1200_P
+    (1920, 1200): dai.MonoCameraProperties.SensorResolution.THE_1200_P,
 }
 
 
@@ -59,8 +60,7 @@ class SelectedDevice:
     def get_intrinsic_matrix(self, width: int, height: int) -> np.ndarray:
         if not self._right_cam_intrinsic_matrix is None:
             return self._right_cam_intrinsic_matrix
-        M_right = self.calibration_data.getCameraIntrinsics(
-            dai.CameraBoardSocket.RIGHT, dai.Size2f(width, height))
+        M_right = self.calibration_data.getCameraIntrinsics(dai.CameraBoardSocket.RIGHT, dai.Size2f(width, height))
         self._right_cam_intrinsic_matrix = np.array(M_right).reshape(3, 3)
         return self._right_cam_intrinsic_matrix
 
@@ -81,15 +81,25 @@ class SelectedDevice:
             for config in cam.configs:
                 wh = (config.width, config.height)
                 if wh not in device_properties[resolutions_key]:
-                    device_properties[resolutions_key].append(
-                        (config.width, config.height)
-                    )
-        device_properties["supported_color_resolutions"] = list(map(lambda x: color_wh_to_enum[x].name, sorted(
-            device_properties["supported_color_resolutions"], key=lambda x: x[0] * x[1])))
-        device_properties["supported_left_mono_resolutions"] = list(map(lambda x: color_wh_to_enum[x].name, sorted(
-            device_properties["supported_left_mono_resolutions"], key=lambda x: x[0] * x[1])))
-        device_properties["supported_right_mono_resolutions"] = list(map(lambda x: color_wh_to_enum[x].name, sorted(
-            device_properties["supported_right_mono_resolutions"], key=lambda x: x[0] * x[1])))
+                    device_properties[resolutions_key].append((config.width, config.height))
+        device_properties["supported_color_resolutions"] = list(
+            map(
+                lambda x: color_wh_to_enum[x].name,
+                sorted(device_properties["supported_color_resolutions"], key=lambda x: x[0] * x[1]),
+            )
+        )
+        device_properties["supported_left_mono_resolutions"] = list(
+            map(
+                lambda x: color_wh_to_enum[x].name,
+                sorted(device_properties["supported_left_mono_resolutions"], key=lambda x: x[0] * x[1]),
+            )
+        )
+        device_properties["supported_right_mono_resolutions"] = list(
+            map(
+                lambda x: color_wh_to_enum[x].name,
+                sorted(device_properties["supported_right_mono_resolutions"], key=lambda x: x[0] * x[1]),
+            )
+        )
         return device_properties
 
     def update_pipeline(self, config: PipelineConfiguration, callbacks: "SdkCallbacks") -> Tuple[bool, str]:
@@ -106,72 +116,73 @@ class SelectedDevice:
         if config.color_camera:
             print("Creating color camera")
             self._color = self.oak_cam.create_camera(
-                "color", config.color_camera.resolution, config.color_camera.fps, name="color", encode=True)
+                "color", config.color_camera.resolution, config.color_camera.fps, name="color", encode=True
+            )
             if config.color_camera.xout_video:
-                self.oak_cam.callback(self._color.out.camera,
-                                      callbacks.on_color_frame)
+                self.oak_cam.callback(self._color.out.camera, callbacks.on_color_frame)
         if config.left_camera:
             print("Creating left camera")
             self._left = self.oak_cam.create_camera(
-                "left", config.left_camera.resolution, config.left_camera.fps, name="left")
+                "left", config.left_camera.resolution, config.left_camera.fps, name="left"
+            )
             if config.left_camera.xout:
-                self.oak_cam.callback(self._left.out.camera,
-                                      callbacks.on_left_frame)
+                self.oak_cam.callback(self._left.out.camera, callbacks.on_left_frame)
         if config.right_camera:
             print("Creating right camera")
             self._right = self.oak_cam.create_camera(
-                "right", config.right_camera.resolution, config.right_camera.fps, name="right")
+                "right", config.right_camera.resolution, config.right_camera.fps, name="right"
+            )
             if config.right_camera.xout:
                 self.oak_cam.callback(self._right, callbacks.on_right_frame)
         if config.depth:
             print("Creating depth")
-            self._stereo = self.oak_cam.create_stereo(
-                left=self._left, right=self._right, name="depth")
-            self._stereo.config_stereo(lr_check=config.depth.lr_check, subpixel=config.depth.subpixel_disparity, subpixel_bits=5,
-                                       confidence=config.depth.confidence, align=config.depth.align, lr_check_threshold=config.depth.lrc_threshold,
-                                       median=config.depth.median)
+            self._stereo = self.oak_cam.create_stereo(left=self._left, right=self._right, name="depth")
+            self._stereo.config_stereo(
+                lr_check=config.depth.lr_check,
+                subpixel=config.depth.subpixel_disparity,
+                subpixel_bits=5,
+                confidence=config.depth.confidence,
+                align=config.depth.align,
+                lr_check_threshold=config.depth.lrc_threshold,
+                median=config.depth.median,
+            )
             self.oak_cam.callback(self._stereo, callbacks.on_stereo_frame)
             if config.depth.pointcloud and config.depth.pointcloud.enabled:
-                self._pc = self.oak_cam.create_pointcloud(
-                    stereo=self._stereo, colorize=self._color)
+                self._pc = self.oak_cam.create_pointcloud(stereo=self._stereo, colorize=self._color)
                 self.oak_cam.callback(self._pc, callbacks.on_pointcloud)
 
         if config.imu:
             print("Creating IMU")
             imu = self.oak_cam.create_imu()
-            # TODO Sdk will handle sensors list on it's own
-            sensors = [dai.IMUSensor.ACCELEROMETER, dai.IMUSensor.GYROSCOPE_CALIBRATED,
-                       dai.IMUSensor.MAGNETOMETER_CALIBRATED, dai.IMUSensor.ROTATION_VECTOR]
-            imu.config_imu(sensors, report_rate=config.imu.report_rate,
-                           batch_report_threshold=config.imu.batch_report_threshold)
+            # TODO(filip): Sdk will handle sensors list on it's own
+            sensors = [
+                dai.IMUSensor.ACCELEROMETER,
+                dai.IMUSensor.GYROSCOPE_CALIBRATED,
+                dai.IMUSensor.MAGNETOMETER_CALIBRATED,
+                dai.IMUSensor.ROTATION_VECTOR,
+            ]
+            imu.config_imu(
+                sensors, report_rate=config.imu.report_rate, batch_report_threshold=config.imu.batch_report_threshold
+            )
             self.oak_cam.callback(imu, callbacks.on_imu)
 
         if config.ai_model and config.ai_model.path:
             if config.ai_model.path == "age-gender-recognition-retail-0013":
-                face_detection = self.oak_cam.create_nn(
-                    "face-detection-retail-0004", self._color)
-                self._nnet = self.oak_cam.create_nn(
-                    "age-gender-recognition-retail-0013", input=face_detection
-                )
-                self.oak_cam.callback(
-                    self._nnet, callbacks.on_age_gender_packet)
+                face_detection = self.oak_cam.create_nn("face-detection-retail-0004", self._color)
+                self._nnet = self.oak_cam.create_nn("age-gender-recognition-retail-0013", input=face_detection)
+                self.oak_cam.callback(self._nnet, callbacks.on_age_gender_packet)
             elif config.ai_model.path == "mobilenet-ssd":
                 self._nnet = self.oak_cam.create_nn(
                     config.ai_model.path,
                     self._color,
                 )
-                self.oak_cam.callback(
-                    self._nnet, callbacks.on_mobilenet_ssd_packet)
+                self.oak_cam.callback(self._nnet, callbacks.on_mobilenet_ssd_packet)
             else:
-                self._nnet = self.oak_cam.create_nn(
-                    config.ai_model.path,
-                    self._color
-                )
+                self._nnet = self.oak_cam.create_nn(config.ai_model.path, self._color)
                 callback = callbacks.on_detections
                 if config.ai_model.path == "yolo-v3-tiny-tf":
                     callback = callbacks.on_yolo_packet
-                self.oak_cam.callback(
-                    self._nnet, callback)
+                self.oak_cam.callback(self._nnet, callback)
         try:
             self.oak_cam.start(blocking=False)
         except RuntimeError as e:
@@ -185,7 +196,6 @@ class SelectedDevice:
         return running, {"message": "Pipeline started" if running else "Couldn't start pipeline"}
 
 
-
 class DepthaiViewerBack:
     _device: SelectedDevice = None
 
@@ -195,7 +205,6 @@ class DepthaiViewerBack:
 
     # Sdk callbacks for handling data from the device and sending it to the frontend
     sdk_callbacks: SdkCallbacks
-
 
     def __init__(self, compression: bool = False) -> None:
         self.action_queue = Queue()
@@ -207,8 +216,9 @@ class DepthaiViewerBack:
         self.store.on_select_device = self.select_device
         self.store.on_reset = self.on_reset
 
-        self.api_process = threading.Thread(target=start_api, args=(
-            self.action_queue, self.result_queue, self.send_message_queue))
+        self.api_process = threading.Thread(
+            target=start_api, args=(self.action_queue, self.result_queue, self.send_message_queue)
+        )
         self.api_process.start()
 
         self.sdk_callbacks = SdkCallbacks(self.store)
@@ -251,8 +261,7 @@ class DepthaiViewerBack:
             print("No device selected, can't update pipeline!")
             return False, {"message": "No device selected, can't update pipeline!"}
         print("Updating pipeline...")
-        started, message = self._device.update_pipeline(
-            self.store.pipeline_config, callbacks=self.sdk_callbacks)
+        started, message = self._device.update_pipeline(self.store.pipeline_config, callbacks=self.sdk_callbacks)
         if not started:
             self.set_device(None)
         return started, {"message": message}
@@ -263,22 +272,18 @@ class DepthaiViewerBack:
             try:
                 action, kwargs = self.action_queue.get(timeout=0.001)
                 print("Handling action: ", action)
-                self.result_queue.put(
-                    self.store.handle_action(action, **kwargs))
+                self.result_queue.put(self.store.handle_action(action, **kwargs))
             except QueueEmptyException:
                 pass
 
             if self._device and self._device.oak_cam:
                 self._device.oak_cam.poll()
                 if self._device.oak_cam.device.isClosed():
-                    # TODO: Typehint the messages properly
+                    # TODO(filip): Typehint the messages properly
                     self.on_reset()
-                    self.send_message_queue.put(json.dumps({
-                        "type": "Error", "data": {
-                            "action": "FullReset",
-                            "message": "Device disconnected"
-                        }
-                    }))
+                    self.send_message_queue.put(
+                        json.dumps({"type": "Error", "data": {"action": "FullReset", "message": "Device disconnected"}})
+                    )
 
 
 if __name__ == "__main__":

@@ -3,13 +3,14 @@ from typing import List, Callable, Tuple
 from .device_configuration import PipelineConfiguration
 from .topic import Topic
 
+
 class Action(Enum):
     UPDATE_PIPELINE = 0
     SELECT_DEVICE = 1
     GET_SUBSCRIPTIONS = 2
     SET_SUBSCRIPTIONS = 3
     GET_PIPELINE = 4
-    RESET = 5 # When anything bad happens, a reset occurs (like closing ws connection)
+    RESET = 5  # When anything bad happens, a reset occurs (like closing ws connection)
     GET_AVAILABLE_DEVICES = 6
 
 

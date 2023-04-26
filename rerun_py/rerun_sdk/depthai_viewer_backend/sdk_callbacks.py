@@ -44,33 +44,31 @@ class SdkCallbacks:
             accel: dai.IMUReportAccelerometer = data.acceleroMeter
             mag: dai.IMUReportMagneticField = data.magneticField
             rot: dai.IMUReportRotationVectorWAcc = data.rotationVector
-            # TODO: Move coordinate mapping to sdk
-            self.ahrs.Q = self.ahrs.updateIMU(self.ahrs.Q, np.array(
-                [gyro.z, gyro.x, gyro.y]), np.array([accel.z, accel.x, accel.y]))
+            # TODO(filip): Move coordinate mapping to sdk
+            self.ahrs.Q = self.ahrs.updateIMU(
+                self.ahrs.Q, np.array([gyro.z, gyro.x, gyro.y]), np.array([accel.z, accel.x, accel.y])
+            )
         if Topic.ImuData not in self.store.subscriptions:
             return
-        rr.log_imu([accel.z, accel.x, accel.y], [gyro.z, gyro.x,
-                   gyro.y], self.ahrs.Q, [mag.x, mag.y, mag.z])
+        rr.log_imu([accel.z, accel.x, accel.y], [gyro.z, gyro.x, gyro.y], self.ahrs.Q, [mag.x, mag.y, mag.z])
 
     def on_pointcloud(self, packet: PointcloudPacket):
         if Topic.PointCloud not in self.store.subscriptions:
             return
-        colors = cv2.cvtColor(packet.color_frame.getCvFrame(),
-                              cv2.COLOR_BGR2RGB).reshape(-1, 3)
+        colors = cv2.cvtColor(packet.color_frame.getCvFrame(), cv2.COLOR_BGR2RGB).reshape(-1, 3)
         points = packet.points.reshape(-1, 3)
         rr.log_points(EntityPath.POINT_CLOUD, points, colors=colors)
 
     def on_color_frame(self, frame: FramePacket):
-        # Always log pinhole cam and pose (TODO move somewhere else or not)
+        # Always log pinhole cam and pose (TODO(filip): move somewhere else or not)
         if Topic.ColorImage not in self.store.subscriptions:
             return
-        rr.log_rigid3(EntityPath.CAMERA_TRANSFORM, child_from_parent=(
-            [0, 0, 0], self.ahrs.Q), xyz="RDF")
+        rr.log_rigid3(EntityPath.CAMERA_TRANSFORM, child_from_parent=([0, 0, 0], self.ahrs.Q), xyz="RDF")
         w, h = frame.imgFrame.getWidth(), frame.imgFrame.getHeight()
-        rr.log_pinhole(EntityPath.PINHOLE_CAMERA, child_from_parent=self._get_camera_intrinsics(
-            w, h), width=w, height=h)
-        rr.log_image(EntityPath.COLOR_CAMERA, cv2.cvtColor(
-            frame.frame, cv2.COLOR_BGR2RGB))
+        rr.log_pinhole(
+            EntityPath.PINHOLE_CAMERA, child_from_parent=self._get_camera_intrinsics(w, h), width=w, height=h
+        )
+        rr.log_image(EntityPath.COLOR_CAMERA, cv2.cvtColor(frame.frame, cv2.COLOR_BGR2RGB))
 
     def on_left_frame(self, frame: FramePacket):
         if Topic.LeftMono not in self.store.subscriptions:
@@ -90,31 +88,31 @@ class SdkCallbacks:
         # depth_frame_color = depth_frame
         # pinhole_camera = PinholeCamera(self._device.get_intrinsic_matrix(frame.imgFrame.getWidth(
         # ), frame.imgFrame.getHeight()), frame.imgFrame.getWidth(), frame.imgFrame.getHeight())
-        depth_frame_color = cv2.normalize(
-            depth_frame, None, 255, 0, cv2.NORM_INF, cv2.CV_8UC1)
+        depth_frame_color = cv2.normalize(depth_frame, None, 255, 0, cv2.NORM_INF, cv2.CV_8UC1)
         depth_frame_color = cv2.equalizeHist(depth_frame_color)
-        depth_frame_color = cv2.applyColorMap(
-            depth_frame_color, cv2.COLORMAP_HOT)
+        depth_frame_color = cv2.applyColorMap(depth_frame_color, cv2.COLORMAP_HOT)
         rr.log_depth_image(EntityPath.DEPTH, depth_frame, meter=1e3)
 
-    
     def on_detections(self, packet: DetectionPacket):
-        rects, colors, labels = self._detections_to_rects_colors_labels(
-            packet)
+        rects, colors, labels = self._detections_to_rects_colors_labels(packet)
         rr.log_rects(EntityPath.DETECTIONS, rects, rect_format=RectFormat.XYXY, colors=colors, labels=labels)
 
-    def _detections_to_rects_colors_labels(self, packet: DetectionPacket, labels_dict: Union[Dict, None] = None) -> Tuple[List, List, List]:
+    def _detections_to_rects_colors_labels(
+        self, packet: DetectionPacket, labels_dict: Union[Dict, None] = None
+    ) -> Tuple[List, List, List]:
         h, w, _ = packet.frame.shape
         rects = []
         colors = []
         labels = []
         for detection in packet.img_detections.detections:
-            rects.append([
-                max(detection.xmin, 0) * w,
-                max(detection.ymin, 0) * h,
-                min(detection.xmax, 1) * w,
-                min(detection.ymax, 1) * h
-            ])
+            rects.append(
+                [
+                    max(detection.xmin, 0) * w,
+                    max(detection.ymin, 0) * h,
+                    min(detection.xmax, 1) * w,
+                    min(detection.ymax, 1) * h,
+                ]
+            )
             colors.append([0, 255, 0])
             label = ""
             if labels_dict is not None:
@@ -124,26 +122,31 @@ class SdkCallbacks:
         return rects, colors, labels
 
     def on_yolo_packet(self, packet: DetectionPacket):
-        rects, colors, labels = self._detections_to_rects_colors_labels(
-            packet, classification_labels.YOLO_TINY_LABELS)
-        rr.log_rects(EntityPath.DETECTIONS, rects=rects,
-                     colors=colors, labels=labels, rect_format=RectFormat.XYXY)
+        rects, colors, labels = self._detections_to_rects_colors_labels(packet, classification_labels.YOLO_TINY_LABELS)
+        rr.log_rects(EntityPath.DETECTIONS, rects=rects, colors=colors, labels=labels, rect_format=RectFormat.XYXY)
 
     def on_age_gender_packet(self, packet: TwoStagePacket):
         for det, rec in zip(packet.detections, packet.nnData):
-            age = int(
-                float(np.squeeze(np.array(rec.getLayerFp16('age_conv3')))) * 100)
-            gender = np.squeeze(np.array(rec.getLayerFp16('prob')))
+            age = int(float(np.squeeze(np.array(rec.getLayerFp16("age_conv3")))) * 100)
+            gender = np.squeeze(np.array(rec.getLayerFp16("prob")))
             gender_str = "Woman" if gender[0] > gender[1] else "Man"
             label = f"{gender_str}, {age}"
             color = [255, 0, 0] if gender[0] > gender[1] else [0, 0, 255]
             x0, y0, x1, y1 = det.get_bbox()
-            # TODO: maybe use rr.log_annotation_context to log class colors for detections
-            rr.log_rect(EntityPath.DETECTION, [x0 * packet.frame.shape[1], y0 * packet.frame.shape[0], x1 *
-                        packet.frame.shape[1], y1 * packet.frame.shape[0]], rect_format=RectFormat.XYXY, color=color, label=label)
+            # TODO(filip): maybe use rr.log_annotation_context to log class colors for detections
+            rr.log_rect(
+                EntityPath.DETECTION,
+                [
+                    x0 * packet.frame.shape[1],
+                    y0 * packet.frame.shape[0],
+                    x1 * packet.frame.shape[1],
+                    y1 * packet.frame.shape[0],
+                ],
+                rect_format=RectFormat.XYXY,
+                color=color,
+                label=label,
+            )
 
     def on_mobilenet_ssd_packet(self, packet: DetectionPacket):
-        rects, colors, labels = self._detections_to_rects_colors_labels(
-            packet, classification_labels.MOBILENET_LABELS)
-        rr.log_rects(EntityPath.DETECTIONS, rects=rects,
-                     colors=colors, labels=labels, rect_format=RectFormat.XYXY)
+        rects, colors, labels = self._detections_to_rects_colors_labels(packet, classification_labels.MOBILENET_LABELS)
+        rr.log_rects(EntityPath.DETECTIONS, rects=rects, colors=colors, labels=labels, rect_format=RectFormat.XYXY)
