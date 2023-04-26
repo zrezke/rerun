@@ -1,15 +1,17 @@
-from websockets.server import WebSocketServerProtocol
-import json
-import websockets
 import asyncio
-from .device_configuration import PipelineConfiguration
-from signal import signal, SIGINT
+import json
 from multiprocessing import Queue
 from queue import Empty as QueueEmptyException
-from .store import Action
-import depthai as dai
+from signal import SIGINT, signal
 from typing import Dict, Tuple
-from .topic import Topic
+
+import depthai as dai
+import websockets
+from websockets.server import WebSocketServerProtocol
+
+from depthai_viewer_backend.device_configuration import PipelineConfiguration
+from depthai_viewer_backend.store import Action
+from depthai_viewer_backend.topic import Topic
 
 signal(SIGINT, lambda *args, **kwargs: exit(0))
 
@@ -23,8 +25,9 @@ send_message_queue: Queue = None
 
 def dispatch_action(action: Action, **kwargs) -> Tuple[bool, Dict[str, any]]:
     """
-    Dispatches an action that will be executed by store.py
-    Returns: (success: bool, result: Dict[str, any])
+    Dispatches an action that will be executed by store.py.
+
+    Returns: (success: bool, result: Dict[str, any]).
     """
     dispatch_action_queue.put((action, kwargs))
     return result_queue.get()
@@ -145,9 +148,11 @@ async def main():
 
 def start_api(_dispatch_action_queue: Queue, _result_queue: Queue, _send_message_queue: Queue):
     """
+    Starts the websocket API.
+
     _dispatch_action_queue: Queue to send actions to store.py
     _result_queue: Queue to get results from store.py
-    _send_message_queue: Queue to send messages to frontend
+    _send_message_queue: Queue to send messages to frontend.
     """
     global dispatch_action_queue
     dispatch_action_queue = _dispatch_action_queue

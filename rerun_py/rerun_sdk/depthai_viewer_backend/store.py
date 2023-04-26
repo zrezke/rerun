@@ -1,7 +1,8 @@
 from enum import Enum
-from typing import List, Callable, Tuple
-from .device_configuration import PipelineConfiguration
-from .topic import Topic
+from typing import Callable, List, Tuple
+
+from depthai_viewer_backend.device_configuration import PipelineConfiguration
+from depthai_viewer_backend.topic import Topic
 
 
 class Action(Enum):
@@ -34,7 +35,7 @@ class Store:
                     return success, message
         elif action == Action.SELECT_DEVICE:
             device_id = kwargs.get("device_id", None)
-            if device_id != None:
+            if device_id is not None:
                 self.device_id = device_id
                 if self.on_select_device:
                     return self.on_select_device(device_id)

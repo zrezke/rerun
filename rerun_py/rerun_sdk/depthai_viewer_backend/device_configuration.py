@@ -1,7 +1,8 @@
 from typing import Optional
+
 import depthai as dai
-from pydantic import BaseModel
 from depthai_sdk.previews import Previews as QueueNames
+from pydantic import BaseModel
 
 
 class ColorCameraConfiguration(BaseModel):

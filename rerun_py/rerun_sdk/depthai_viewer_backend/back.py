@@ -11,11 +11,10 @@ from depthai_sdk.components import NNComponent
 from depthai_sdk.components.pointcloud_component import PointcloudComponent
 from depthai_sdk.oak_camera import CameraComponent
 
-from .config_api import start_api
-from .device_configuration import PipelineConfiguration
-from .sdk_callbacks import SdkCallbacks
-from .store import Store
-from .topic import *
+from depthai_viewer_backend.config_api import start_api
+from depthai_viewer_backend.device_configuration import PipelineConfiguration
+from depthai_viewer_backend.sdk_callbacks import SdkCallbacks
+from depthai_viewer_backend.store import Store
 
 color_wh_to_enum = {
     (1280, 720): dai.ColorCameraProperties.SensorResolution.THE_720_P,
@@ -58,7 +57,7 @@ class SelectedDevice:
         print("Oak cam: ", self.oak_cam)
 
     def get_intrinsic_matrix(self, width: int, height: int) -> np.ndarray:
-        if not self._right_cam_intrinsic_matrix is None:
+        if self._right_cam_intrinsic_matrix is not None:
             return self._right_cam_intrinsic_matrix
         M_right = self.calibration_data.getCameraIntrinsics(dai.CameraBoardSocket.RIGHT, dai.Size2f(width, height))
         self._right_cam_intrinsic_matrix = np.array(M_right).reshape(3, 3)
@@ -185,7 +184,7 @@ class SelectedDevice:
                 self.oak_cam.callback(self._nnet, callback)
         try:
             self.oak_cam.start(blocking=False)
-        except RuntimeError as e:
+        except RuntimeError:
             return False, {"message": "Couldn't start pipeline"}
         running = self.oak_cam.running()
         if running:
@@ -252,7 +251,7 @@ class DepthaiViewerBack:
         try:
             device_properties = self._device.get_device_properties()
             return True, {"message:": "Device selected successfully", "device_properties": device_properties}
-        except RuntimeError as e:
+        except RuntimeError:
             self.on_reset()
             return False, {"message": "Failed to get device properties", "device_properties": {}}
 
@@ -267,7 +266,7 @@ class DepthaiViewerBack:
         return started, {"message": message}
 
     def run(self):
-        """Handles ws messages and poll OakCam"""
+        """Handles ws messages and poll OakCam."""
         while True:
             try:
                 action, kwargs = self.action_queue.get(timeout=0.001)

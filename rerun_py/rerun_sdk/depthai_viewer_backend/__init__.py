@@ -1,4 +1,3 @@
-from .back import DepthaiViewerBack
-from threading import Thread
+from depthai_viewer_backend.back import DepthaiViewerBack
 
 DepthaiViewerBack()
