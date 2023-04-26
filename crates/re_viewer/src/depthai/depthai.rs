@@ -13,6 +13,7 @@ use std::fmt;
 use std::sync::mpsc::channel;
 
 use strum::EnumIter;
+use strum::IntoEnumIterator;
 
 #[derive(serde::Deserialize, serde::Serialize, fmt::Debug, PartialEq, Clone, Copy, EnumIter)]
 #[allow(non_camel_case_types)]
@@ -230,7 +231,7 @@ pub struct PointcloudConfig {
     pub enabled: bool,
 }
 
-#[derive(Default, serde::Deserialize, serde::Serialize, Clone, PartialEq)]
+#[derive(Default, serde::Deserialize, serde::Serialize, Clone)]
 pub struct DeviceConfig {
     pub color_camera: ColorCameraConfig,
     pub left_camera: MonoCameraConfig,
@@ -240,6 +241,21 @@ pub struct DeviceConfig {
     #[serde(default = "DepthConfig::default_as_option")]
     pub depth: Option<DepthConfig>,
     pub ai_model: AiModel,
+}
+
+impl PartialEq for DeviceConfig {
+    fn eq(&self, other: &Self) -> bool {
+        let depth_eq = match (&self.depth, &other.depth) {
+            (Some(a), Some(b)) => a == b,
+            _ => true, // If one is None, it's only different if depth_enabled is different
+        };
+        self.color_camera == other.color_camera
+            && self.left_camera == other.left_camera
+            && self.right_camera == other.right_camera
+            && depth_eq
+            && self.depth_enabled == other.depth_enabled
+            && self.ai_model == other.ai_model
+    }
 }
 
 #[inline]
@@ -258,8 +274,13 @@ impl fmt::Debug for DeviceConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Device config: {:?} {:?} {:?}",
-            self.color_camera, self.left_camera, self.right_camera,
+            "Device config: {:?} {:?} {:?}, depth: {:?}, ai_model: {:?}, depth_enabled: {:?}",
+            self.color_camera,
+            self.left_camera,
+            self.right_camera,
+            self.depth,
+            self.ai_model,
+            self.depth_enabled,
         )
     }
 }
@@ -306,7 +327,7 @@ pub struct Device {
     pub supported_right_mono_resolutions: Vec<MonoCameraResolution>,
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, PartialEq, fmt::Debug)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, fmt::Debug)]
 pub struct AiModel {
     pub path: String,
     pub display_name: String,
@@ -321,14 +342,20 @@ impl Default for AiModel {
     }
 }
 
+impl PartialEq for AiModel {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct State {
     #[serde(skip)]
     devices_available: Option<Vec<DeviceId>>,
     #[serde(skip)]
     pub selected_device: Device,
-    pub device_config: DeviceConfigState,
-
+    pub applied_device_config: DeviceConfigState,
+    pub modified_device_config: DeviceConfigState,
     #[serde(skip, default = "all_subscriptions")]
     // Want to resubscribe to api when app is reloaded
     pub subscriptions: Vec<ChannelId>, // Shown in ui
@@ -340,20 +367,16 @@ pub struct State {
     poll_instant: Option<Instant>,
     #[serde(default = "default_neural_networks")]
     pub neural_networks: Vec<AiModel>,
+    #[serde(skip)]
+    pub new_auto_add_entity_paths: Vec<EntityPath>, // Used to force add space views when a new subscription appears
 }
 
-// Kind of dangerous, IMPORTANT: Make sure all ChannelId variants are covered
+#[inline]
 fn all_subscriptions() -> Vec<ChannelId> {
-    vec![
-        ChannelId::ColorImage,
-        ChannelId::LeftMono,
-        ChannelId::RightMono,
-        ChannelId::DepthImage,
-        ChannelId::PointCloud,
-        ChannelId::ImuData,
-    ]
+    ChannelId::iter().collect_vec()
 }
 
+#[inline]
 fn default_neural_networks() -> Vec<AiModel> {
     vec![
         AiModel::default(),
@@ -381,18 +404,22 @@ impl Default for State {
         Self {
             devices_available: None,
             selected_device: Device::default(),
-            device_config: DeviceConfigState::default(),
-            subscriptions: all_subscriptions(),
+            applied_device_config: DeviceConfigState::default(),
+            modified_device_config: DeviceConfigState::default(),
+            subscriptions: ChannelId::iter().collect(),
             setting_subscriptions: false,
             backend_comms: BackendCommChannel::default(),
             poll_instant: Some(Instant::now()), // No default for Instant
             neural_networks: default_neural_networks(),
+            new_auto_add_entity_paths: Vec::new(),
         }
     }
 }
 
 #[repr(u8)]
-#[derive(serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq, Eq, fmt::Debug, Hash)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq, Eq, fmt::Debug, Hash, EnumIter,
+)]
 pub enum ChannelId {
     ColorImage,
     LeftMono,
@@ -407,7 +434,7 @@ use lazy_static::lazy_static;
 lazy_static! {
     static ref DEPTHAI_ENTITY_HASHES: HashMap<EntityPathHash, ChannelId> = HashMap::from([
         (
-            EntityPath::from("world/camera/image/rgb").hash(),
+            EntityPath::from("world/camera/image/Color camera").hash(),
             ChannelId::ColorImage,
         ),
         (
@@ -419,25 +446,74 @@ lazy_static! {
             ChannelId::RightMono,
         ),
         (
-            EntityPath::from("right mono camera/depth").hash(),
+            EntityPath::from("world/camera/image/Depth").hash(),
             ChannelId::DepthImage,
         ),
         (
-            EntityPath::from("world/point_cloud").hash(),
+            EntityPath::from("world/camera/Point Cloud").hash(),
             ChannelId::PointCloud,
         ),
     ]);
 }
 
 impl State {
+    /// Should the space view be added to the UI based on the new subscriptions (a subscription change occurred)
+    fn create_entity_paths_from_subscriptions(
+        &mut self,
+        new_subscriptions: &Vec<ChannelId>,
+    ) -> Vec<EntityPath> {
+        let mut new_entity_paths = Vec::new();
+        for channel in new_subscriptions.iter() {
+            match channel {
+                ChannelId::ColorImage => {
+                    new_entity_paths.push(EntityPath::from("world/camera/image/Color camera"));
+                }
+                ChannelId::LeftMono => {
+                    new_entity_paths.push(EntityPath::from("Left mono camera"));
+                }
+                ChannelId::RightMono => {
+                    new_entity_paths.push(EntityPath::from("Right mono camera"));
+                }
+                ChannelId::DepthImage => {
+                    new_entity_paths.push(EntityPath::from("world/camera/image/Depth"));
+                }
+                ChannelId::PointCloud => {
+                    new_entity_paths.push(EntityPath::from("world/camera/Point Cloud"));
+                }
+                _ => {}
+            }
+        }
+        new_entity_paths
+    }
+
+    /// Get the entities (the row in the blueprint tree ui) that should be removed based on UI (e.g. if depth is disabled, remove the depth image)
     pub fn entities_to_remove(&mut self, entity_path: &BTreeSet<EntityPath>) -> Vec<EntityPath> {
         let mut remove_channels = Vec::<ChannelId>::new();
-        if let Some(depth) = self.device_config.config.depth {
+        if let Some(depth) = self.applied_device_config.config.depth {
             if !depth.pointcloud.enabled {
                 remove_channels.push(ChannelId::PointCloud);
             }
         } else {
             remove_channels.push(ChannelId::DepthImage);
+        }
+        if !self
+            .applied_device_config
+            .config
+            .right_camera
+            .stream_enabled
+        {
+            remove_channels.push(ChannelId::RightMono);
+        }
+        if !self.applied_device_config.config.left_camera.stream_enabled {
+            remove_channels.push(ChannelId::LeftMono);
+        }
+        if !self
+            .applied_device_config
+            .config
+            .color_camera
+            .stream_enabled
+        {
+            remove_channels.push(ChannelId::ColorImage);
         }
 
         entity_path
@@ -453,6 +529,7 @@ impl State {
             .collect_vec()
     }
 
+    /// Set subscriptions based on the visible UI
     pub fn set_subscriptions_from_space_views(&mut self, visible_space_views: Vec<&SpaceView>) {
         // If any bool in the vec is true, the channel is currently visible in the ui somewhere
         let mut visibilities = HashMap::<ChannelId, Vec<bool>>::from([
@@ -464,7 +541,7 @@ impl State {
         ]);
         // Fill in visibilities
         for space_view in visible_space_views.iter() {
-            let mut property_map = space_view.data_blueprint.data_blueprints_projected();
+            let property_map = space_view.data_blueprint.data_blueprints_projected();
             for entity_path in space_view.data_blueprint.entity_paths().iter() {
                 if let Some(channel_id) = DEPTHAI_ENTITY_HASHES.get(&entity_path.hash()) {
                     if let Some(visibility) = visibilities.get_mut(channel_id) {
@@ -477,22 +554,32 @@ impl State {
         // First add subscriptions that don't have explicit enable disable buttons in the ui
         let mut possible_subscriptions = Vec::<ChannelId>::from([ChannelId::ImuData]);
         // Now add subscriptions that should be possible in terms of ui
-        if self.device_config.config.depth_enabled {
+        if self.applied_device_config.config.depth_enabled {
             possible_subscriptions.push(ChannelId::DepthImage);
-            if let Some(depth) = self.device_config.config.depth {
+            if let Some(depth) = self.applied_device_config.config.depth {
                 if depth.pointcloud.enabled {
                     possible_subscriptions.push(ChannelId::PointCloud);
                 }
             }
         }
-        if self.device_config.config.color_camera.stream_enabled {
+        if self
+            .applied_device_config
+            .config
+            .color_camera
+            .stream_enabled
+        {
             possible_subscriptions.push(ChannelId::ColorImage);
         }
 
-        if self.device_config.config.left_camera.stream_enabled {
+        if self.applied_device_config.config.left_camera.stream_enabled {
             possible_subscriptions.push(ChannelId::LeftMono);
         }
-        if self.device_config.config.right_camera.stream_enabled {
+        if self
+            .applied_device_config
+            .config
+            .right_camera
+            .stream_enabled
+        {
             possible_subscriptions.push(ChannelId::RightMono);
         }
 
@@ -510,7 +597,7 @@ impl State {
             .collect_vec();
 
         // Keep subscriptions that should be visible but have not yet been sent by the backend
-        for channel in all_subscriptions() {
+        for channel in ChannelId::iter() {
             if !subscriptions.contains(&channel)
                 && possible_subscriptions.contains(&channel)
                 && self.subscriptions.contains(&channel)
@@ -553,6 +640,13 @@ impl State {
             match ws_message.data {
                 WsMessageData::Subscriptions(subscriptions) => {
                     re_log::debug!("Setting subscriptions");
+                    self.new_auto_add_entity_paths = self.create_entity_paths_from_subscriptions(
+                        &subscriptions
+                            .iter()
+                            .filter(|channel_id| !self.subscriptions.contains(channel_id))
+                            .cloned()
+                            .collect_vec(),
+                    );
                     self.subscriptions = subscriptions;
                 }
                 WsMessageData::Devices(devices) => {
@@ -567,22 +661,35 @@ impl State {
                             subs.push(ChannelId::PointCloud);
                         }
                     }
-                    self.device_config.config = config;
-                    self.device_config.config.depth_enabled =
-                        self.device_config.config.depth.is_some();
+                    if config.color_camera.stream_enabled {
+                        subs.push(ChannelId::ColorImage);
+                    }
+                    if config.left_camera.stream_enabled {
+                        subs.push(ChannelId::LeftMono);
+                    }
+                    if config.right_camera.stream_enabled {
+                        subs.push(ChannelId::RightMono);
+                    }
+                    self.applied_device_config.config = config.clone();
+                    self.modified_device_config.config = config;
+                    self.applied_device_config.config.depth_enabled =
+                        self.applied_device_config.config.depth.is_some();
+                    self.modified_device_config.config.depth_enabled =
+                        self.modified_device_config.config.depth.is_some();
                     self.set_subscriptions(&subs);
-                    self.device_config.update_in_progress = false;
+                    self.applied_device_config.update_in_progress = false;
                 }
                 WsMessageData::Device(device) => {
                     re_log::debug!("Setting device: {device:?}");
                     self.selected_device = device;
                     self.backend_comms.set_subscriptions(&self.subscriptions);
-                    self.backend_comms.set_pipeline(&self.device_config.config);
-                    self.device_config.update_in_progress = true;
+                    self.backend_comms
+                        .set_pipeline(&self.applied_device_config.config);
+                    self.applied_device_config.update_in_progress = true;
                 }
                 WsMessageData::Error(error) => {
                     re_log::error!("Error: {:}", error.message);
-                    self.device_config.update_in_progress = false;
+                    self.applied_device_config.update_in_progress = false;
                     match error.action {
                         ErrorAction::None => (),
                         ErrorAction::FullReset => {
@@ -616,6 +723,7 @@ impl State {
     }
 
     pub fn set_device_config(&mut self, config: &mut DeviceConfig) {
+        // Don't try to set pipeline in ws not connected or device not selected
         if !self
             .backend_comms
             .ws
@@ -627,13 +735,12 @@ impl State {
         }
         config.left_camera.board_socket = BoardSocket::LEFT;
         config.right_camera.board_socket = BoardSocket::RIGHT;
-        self.device_config.config = config.clone();
         if !config.depth_enabled {
             config.depth = None;
         }
         self.backend_comms.set_pipeline(&config);
         re_log::info!("Creating pipeline...");
-        self.device_config.update_in_progress = true;
+        self.applied_device_config.update_in_progress = true;
     }
 }
 

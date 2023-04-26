@@ -3,6 +3,14 @@ build-backend = "maturin"
 requires = ["maturin>=0.14.0,<0.15"]
 
 [project]
+dependencies = [
+  "deprecated",
+  "numpy>=1.23",
+  "pyarrow==10.0.1",
+  "ahrs",
+  "depthai",
+  "depthai-sdk",
+]
 classifiers = [
   "Programming Language :: Rust",
   "Programming Language :: Python :: Implementation :: CPython",
@@ -11,7 +19,6 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Scientific/Engineering :: Visualization",
 ]
-dependencies = ["deprecated", "numpy>=1.23", "pyarrow==10.0.1"]
 description = "The Rerun Logging SDK"
 keywords = ["computer-vision", "logging", "rerun"]
 name = "depthai-viewer"
@@ -93,4 +100,8 @@ ban-relative-imports = "all"
 # See https://github.com/rerun-io/rerun/pull/1085 for more details
 include = ["rerun_sdk.pth", "rerun_sdk/rerun_demo/colmap_fiat.rrd"]
 locked = true
-python-packages = ["rerun_sdk/rerun", "rerun_sdk/rerun_demo"]
+python-packages = [
+  "rerun_sdk/rerun",
+  "rerun_sdk/rerun_demo",
+  "rerun_sdk/depthai_viewer_backend",
+]
