@@ -434,23 +434,35 @@ use lazy_static::lazy_static;
 lazy_static! {
     static ref DEPTHAI_ENTITY_HASHES: HashMap<EntityPathHash, ChannelId> = HashMap::from([
         (
-            EntityPath::from("world/camera/image/Color camera").hash(),
+            EntityPath::from("color/camera/rgb/Color camera").hash(),
             ChannelId::ColorImage,
         ),
         (
-            EntityPath::from("Left mono camera").hash(),
+            EntityPath::from("mono/camera/left_mono/Left mono").hash(),
             ChannelId::LeftMono,
         ),
         (
-            EntityPath::from("Right mono camera").hash(),
+            EntityPath::from("mono/camera/right_mono/Right mono").hash(),
             ChannelId::RightMono,
         ),
         (
-            EntityPath::from("world/camera/image/Depth").hash(),
+            EntityPath::from("color/camera/rgb/Depth").hash(),
             ChannelId::DepthImage,
         ),
         (
-            EntityPath::from("world/camera/Point Cloud").hash(),
+            EntityPath::from("mono/camera/right_mono/Depth").hash(),
+            ChannelId::DepthImage,
+        ),
+        (
+            EntityPath::from("mono/camera/left_mono/Depth").hash(),
+            ChannelId::DepthImage,
+        ),
+        (
+            EntityPath::from("color/camera/Point Cloud").hash(),
+            ChannelId::PointCloud,
+        ),
+        (
+            EntityPath::from("mono/camera/Point Cloud").hash(),
             ChannelId::PointCloud,
         ),
     ]);
@@ -466,19 +478,21 @@ impl State {
         for channel in new_subscriptions.iter() {
             match channel {
                 ChannelId::ColorImage => {
-                    new_entity_paths.push(EntityPath::from("world/camera/image/Color camera"));
+                    new_entity_paths.push(EntityPath::from("color/camera/rgb/Color camera"));
                 }
                 ChannelId::LeftMono => {
-                    new_entity_paths.push(EntityPath::from("Left mono camera"));
+                    new_entity_paths.push(EntityPath::from("mono/camera/left_mono/Left mono"));
                 }
                 ChannelId::RightMono => {
-                    new_entity_paths.push(EntityPath::from("Right mono camera"));
+                    new_entity_paths.push(EntityPath::from("mono/camera/right_mono/Right mono"));
                 }
                 ChannelId::DepthImage => {
-                    new_entity_paths.push(EntityPath::from("world/camera/image/Depth"));
+                    new_entity_paths.push(EntityPath::from("color/camera/rgb/Depth"));
+                    new_entity_paths.push(EntityPath::from("mono/camera/right_mono/Depth"));
+                    new_entity_paths.push(EntityPath::from("mono/camera/left_mono/Depth"));
                 }
                 ChannelId::PointCloud => {
-                    new_entity_paths.push(EntityPath::from("world/camera/Point Cloud"));
+                    new_entity_paths.push(EntityPath::from("mono/camera/Point Cloud"));
                 }
                 _ => {}
             }

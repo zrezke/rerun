@@ -3,32 +3,36 @@ from typing import Callable, Dict, List, Tuple, Union
 import cv2
 import depthai as dai
 import numpy as np
-import rerun as rr
 from ahrs.filters import Mahony
-from depthai_sdk import FramePacket
 from depthai_sdk.classes.packets import (
+    DepthPacket,
     DetectionPacket,
+    FramePacket,
     IMUPacket,
     PointcloudPacket,
     TwoStagePacket,
 )
-from rerun.components.rect2d import RectFormat
-
 from depthai_viewer_backend import classification_labels
 from depthai_viewer_backend.store import Store
 from depthai_viewer_backend.topic import Topic
+from rerun.components.rect2d import RectFormat
+
+import rerun as rr
 
 
 class EntityPath:
-    POINT_CLOUD = "world/camera/Point Cloud"
-    LEFT_CAMERA = "Left mono camera"
-    RIGHT_CAMERA = "Right mono camera"
-    COLOR_CAMERA = "world/camera/image/Color camera"
-    DEPTH = "world/camera/image/Depth"
-    DETECTIONS = "world/camera/image/Detections"
-    DETECTION = "world/camera/image/Detection"
-    PINHOLE_CAMERA = "world/camera/image"
-    CAMERA_TRANSFORM = "world/camera"
+    LEFT_PINHOLE_CAMERA = "mono/camera/left_mono"
+    LEFT_CAMERA_IMAGE = "mono/camera/left_mono/Left mono"
+    RIGHT_PINHOLE_CAMERA = "mono/camera/right_mono"
+    RIGHT_CAMERA_IMAGE = "mono/camera/right_mono/Right mono"
+    RGB_PINHOLE_CAMERA = "color/camera/rgb"
+    RGB_CAMERA_IMAGE = "color/camera/rgb/Color camera"
+
+    DETECTIONS = "color/camera/rgb/Detections"
+    DETECTION = "color/camera/rgb/Detection"
+
+    RGB_CAMERA_TRANSFORM = "color/camera"
+    MONO_CAMERA_TRANSFORM = "mono/camera"
 
 
 class SdkCallbacks:
@@ -64,30 +68,48 @@ class SdkCallbacks:
             return
         colors = cv2.cvtColor(packet.color_frame.getCvFrame(), cv2.COLOR_BGR2RGB).reshape(-1, 3)
         points = packet.points.reshape(-1, 3)
-        rr.log_points(EntityPath.POINT_CLOUD, points, colors=colors)
+
+        path = EntityPath.RGB_CAMERA_TRANSFORM + "/Point cloud"
+        depth = self.store.pipeline_config.depth
+        if not depth:
+            # Essentially impossible to get here
+            return
+        if depth.align == dai.CameraBoardSocket.LEFT or depth.align == dai.CameraBoardSocket.RIGHT:
+            path = EntityPath.MONO_CAMERA_TRANSFORM + "/Point cloud"
+        rr.log_points(path, points, colors=colors)
 
     def on_color_frame(self, frame: FramePacket):
         # Always log pinhole cam and pose (TODO(filip): move somewhere else or not)
         if Topic.ColorImage not in self.store.subscriptions:
             return
-        rr.log_rigid3(EntityPath.CAMERA_TRANSFORM, child_from_parent=([0, 0, 0], self.ahrs.Q), xyz="RDF")
+        rr.log_rigid3(EntityPath.RGB_CAMERA_TRANSFORM, child_from_parent=([0, 0, 0], self.ahrs.Q), xyz="RDF")
         w, h = frame.imgFrame.getWidth(), frame.imgFrame.getHeight()
         rr.log_pinhole(
-            EntityPath.PINHOLE_CAMERA, child_from_parent=self._get_camera_intrinsics(w, h), width=w, height=h
+            EntityPath.RGB_PINHOLE_CAMERA, child_from_parent=self._get_camera_intrinsics(w, h), width=w, height=h
         )
-        rr.log_image(EntityPath.COLOR_CAMERA, cv2.cvtColor(frame.frame, cv2.COLOR_BGR2RGB))
+        rr.log_image(EntityPath.RGB_CAMERA_IMAGE, cv2.cvtColor(frame.frame, cv2.COLOR_BGR2RGB))
 
     def on_left_frame(self, frame: FramePacket):
         if Topic.LeftMono not in self.store.subscriptions:
             return
-        rr.log_image(EntityPath.LEFT_CAMERA, frame.frame)
+        w, h = frame.imgFrame.getWidth(), frame.imgFrame.getHeight()
+        rr.log_rigid3(EntityPath.MONO_CAMERA_TRANSFORM, child_from_parent=([0, 0, 0], self.ahrs.Q), xyz="RDF")
+        rr.log_pinhole(
+            EntityPath.LEFT_PINHOLE_CAMERA, child_from_parent=self._get_camera_intrinsics(w, h), width=w, height=h
+        )
+        rr.log_image(EntityPath.LEFT_CAMERA_IMAGE, frame.frame)
 
     def on_right_frame(self, frame: FramePacket):
         if Topic.RightMono not in self.store.subscriptions:
             return
-        rr.log_image(EntityPath.RIGHT_CAMERA, frame.frame)
+        w, h = frame.imgFrame.getWidth(), frame.imgFrame.getHeight()
+        rr.log_rigid3(EntityPath.MONO_CAMERA_TRANSFORM, child_from_parent=([0, 0, 0], self.ahrs.Q), xyz="RDF")
+        rr.log_pinhole(
+            EntityPath.RIGHT_PINHOLE_CAMERA, child_from_parent=self._get_camera_intrinsics(w, h), width=w, height=h
+        )
+        rr.log_image(EntityPath.RIGHT_CAMERA_IMAGE, frame.frame)
 
-    def on_stereo_frame(self, frame: FramePacket):
+    def on_stereo_frame(self, frame: DepthPacket):
         if Topic.DepthImage not in self.store.subscriptions:
             return
         depth_frame = frame.frame
@@ -95,10 +117,19 @@ class SdkCallbacks:
         # depth_frame_color = depth_frame
         # pinhole_camera = PinholeCamera(self._device.get_intrinsic_matrix(frame.imgFrame.getWidth(
         # ), frame.imgFrame.getHeight()), frame.imgFrame.getWidth(), frame.imgFrame.getHeight())
-        depth_frame_color = cv2.normalize(depth_frame, None, 255, 0, cv2.NORM_INF, cv2.CV_8UC1)
-        depth_frame_color = cv2.equalizeHist(depth_frame_color)
-        depth_frame_color = cv2.applyColorMap(depth_frame_color, cv2.COLORMAP_HOT)
-        rr.log_depth_image(EntityPath.DEPTH, depth_frame, meter=1e3)
+        # depth_frame_color = cv2.normalize(depth_frame, None, 255, 0, cv2.NORM_INF, cv2.CV_8UC1)
+        # depth_frame_color = cv2.equalizeHist(depth_frame_color)
+        # depth_frame_color = cv2.applyColorMap(depth_frame_color, cv2.COLORMAP_HOT)
+        path = EntityPath.RGB_PINHOLE_CAMERA + "/depth"
+        depth = self.store.pipeline_config.depth
+        if not depth:
+            # Essentially impossible to get here
+            return
+        if depth.align == dai.CameraBoardSocket.LEFT:
+            path = EntityPath.LEFT_PINHOLE_CAMERA + "/depth"
+        elif depth.align == dai.CameraBoardSocket.RIGHT:
+            path = EntityPath.RIGHT_PINHOLE_CAMERA + "/depth"
+        rr.log_depth_image(path, depth_frame, meter=1e3)
 
     def on_detections(self, packet: DetectionPacket):
         rects, colors, labels = self._detections_to_rects_colors_labels(packet)

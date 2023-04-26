@@ -194,6 +194,9 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                         ui.checkbox(&mut device_config.depth_enabled, "Depth");
 
                         let mut depth = device_config.depth.unwrap_or_default();
+                        if depth.align == depthai::BoardSocket::RGB && !depth.lr_check {
+                            depth.align = depthai::BoardSocket::AUTO;
+                        }
                         ui.collapsing("Depth settings", |ui| {
                             ui.vertical(|ui| {
                                 ui.checkbox(&mut depth.lr_check, "LR Check");
@@ -204,6 +207,11 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                                         .selected_text(format!("{:?}", depth.align))
                                         .show_ui(ui, |ui| {
                                             for align in depthai::BoardSocket::iter() {
+                                                if align == depthai::BoardSocket::RGB
+                                                    && !depth.lr_check
+                                                {
+                                                    continue;
+                                                }
                                                 ui.selectable_value(
                                                     &mut depth.align,
                                                     align,

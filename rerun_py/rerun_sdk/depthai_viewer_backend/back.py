@@ -38,10 +38,9 @@ mono_wh_to_enum = {
 
 class SelectedDevice:
     id: str
-    _right_cam_intrinsic_matrix: np.ndarray = None
+    intrinsic_matrix: Dict[Tuple[int, int], np.ndarray] = {}
     calibration_data: dai.CalibrationHandler = None
 
-    # Main nodes
     _color: CameraComponent = None
     _left: CameraComponent = None
     _right: CameraComponent = None
@@ -57,11 +56,11 @@ class SelectedDevice:
         print("Oak cam: ", self.oak_cam)
 
     def get_intrinsic_matrix(self, width: int, height: int) -> np.ndarray:
-        if self._right_cam_intrinsic_matrix is not None:
-            return self._right_cam_intrinsic_matrix
+        if self.intrinsic_matrix.get((width, height)) is np.ndarray:
+            return self.intrinsic_matrix.get((width, height))
         M_right = self.calibration_data.getCameraIntrinsics(dai.CameraBoardSocket.RIGHT, dai.Size2f(width, height))
-        self._right_cam_intrinsic_matrix = np.array(M_right).reshape(3, 3)
-        return self._right_cam_intrinsic_matrix
+        self.intrinsic_matrix[(width, height)] = np.array(M_right).reshape(3, 3)
+        return self.intrinsic_matrix[(width, height)]
 
     def get_device_properties(self) -> Dict:
         dai_props = self.oak_cam.device.getConnectedCameraFeatures()
@@ -190,8 +189,7 @@ class SelectedDevice:
         if running:
             self.oak_cam.poll()
             self.calibration_data = self.oak_cam.device.readCalibration()
-            self._xyz = None
-            self._right_cam_intrinsic_matrix = None
+            self.intrinsic_matrix = {}
         return running, {"message": "Pipeline started" if running else "Couldn't start pipeline"}
 
 
