@@ -9,11 +9,10 @@ class Topic(Enum):
     LeftMono = 1
     RightMono = 2
     DepthImage = 3
-    PointCloud = 4
-    PinholeCamera = 5
-    Rectangle = 6
-    Rectangles = 7
-    ImuData = 8
+    PinholeCamera = 4
+    Rectangle = 5
+    Rectangles = 6
+    ImuData = 7
 
     @classmethod
     def create(cls, name_or_id: Union[str, int]) -> "Topic":

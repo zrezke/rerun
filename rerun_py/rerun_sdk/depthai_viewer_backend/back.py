@@ -145,9 +145,9 @@ class SelectedDevice:
                 median=config.depth.median,
             )
             self.oak_cam.callback(self._stereo, callbacks.on_stereo_frame)
-            if config.depth.pointcloud and config.depth.pointcloud.enabled:
-                self._pc = self.oak_cam.create_pointcloud(stereo=self._stereo, colorize=self._color)
-                self.oak_cam.callback(self._pc, callbacks.on_pointcloud)
+            # if config.depth.pointcloud and config.depth.pointcloud.enabled:
+            #     self._pc = self.oak_cam.create_pointcloud(stereo=self._stereo, colorize=self._color)
+            #     self.oak_cam.callback(self._pc, callbacks.on_pointcloud)
 
         if config.imu:
             print("Creating IMU")

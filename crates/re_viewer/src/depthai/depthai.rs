@@ -194,7 +194,6 @@ impl Default for DepthMedianFilter {
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, Debug)]
 pub struct DepthConfig {
     pub median: DepthMedianFilter,
-    pub pointcloud: PointcloudConfig,
     pub lr_check: bool,
     pub lrc_threshold: u64,
     pub extended_disparity: bool,
@@ -208,7 +207,6 @@ impl Default for DepthConfig {
     fn default() -> Self {
         Self {
             median: DepthMedianFilter::default(),
-            pointcloud: PointcloudConfig::default(),
             lr_check: true,
             lrc_threshold: 5,
             extended_disparity: false,
@@ -224,11 +222,6 @@ impl DepthConfig {
     pub fn default_as_option() -> Option<Self> {
         Some(Self::default())
     }
-}
-
-#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq, Default, fmt::Debug)]
-pub struct PointcloudConfig {
-    pub enabled: bool,
 }
 
 #[derive(Default, serde::Deserialize, serde::Serialize, Clone)]
@@ -425,7 +418,6 @@ pub enum ChannelId {
     LeftMono,
     RightMono,
     DepthImage,
-    PointCloud,
     PinholeCamera,
     ImuData,
 }
@@ -457,14 +449,6 @@ lazy_static! {
             EntityPath::from("mono/camera/left_mono/Depth").hash(),
             ChannelId::DepthImage,
         ),
-        (
-            EntityPath::from("color/camera/Point Cloud").hash(),
-            ChannelId::PointCloud,
-        ),
-        (
-            EntityPath::from("mono/camera/Point Cloud").hash(),
-            ChannelId::PointCloud,
-        ),
     ]);
 }
 
@@ -491,9 +475,6 @@ impl State {
                     new_entity_paths.push(EntityPath::from("mono/camera/right_mono/Depth"));
                     new_entity_paths.push(EntityPath::from("mono/camera/left_mono/Depth"));
                 }
-                ChannelId::PointCloud => {
-                    new_entity_paths.push(EntityPath::from("mono/camera/Point Cloud"));
-                }
                 _ => {}
             }
         }
@@ -503,11 +484,7 @@ impl State {
     /// Get the entities (the row in the blueprint tree ui) that should be removed based on UI (e.g. if depth is disabled, remove the depth image)
     pub fn entities_to_remove(&mut self, entity_path: &BTreeSet<EntityPath>) -> Vec<EntityPath> {
         let mut remove_channels = Vec::<ChannelId>::new();
-        if let Some(depth) = self.applied_device_config.config.depth {
-            if !depth.pointcloud.enabled {
-                remove_channels.push(ChannelId::PointCloud);
-            }
-        } else {
+        if self.applied_device_config.config.depth.is_none() {
             remove_channels.push(ChannelId::DepthImage);
         }
         if !self
@@ -551,7 +528,6 @@ impl State {
             (ChannelId::LeftMono, Vec::new()),
             (ChannelId::RightMono, Vec::new()),
             (ChannelId::DepthImage, Vec::new()),
-            (ChannelId::PointCloud, Vec::new()),
         ]);
         // Fill in visibilities
         for space_view in visible_space_views.iter() {
@@ -570,11 +546,6 @@ impl State {
         // Now add subscriptions that should be possible in terms of ui
         if self.applied_device_config.config.depth_enabled {
             possible_subscriptions.push(ChannelId::DepthImage);
-            if let Some(depth) = self.applied_device_config.config.depth {
-                if depth.pointcloud.enabled {
-                    possible_subscriptions.push(ChannelId::PointCloud);
-                }
-            }
         }
         if self
             .applied_device_config
@@ -671,9 +642,6 @@ impl State {
                     let mut subs = self.subscriptions.clone();
                     if let Some(depth) = config.depth {
                         subs.push(ChannelId::DepthImage);
-                        if depth.pointcloud.enabled {
-                            subs.push(ChannelId::PointCloud);
-                        }
                     }
                     if config.color_camera.stream_enabled {
                         subs.push(ChannelId::ColorImage);

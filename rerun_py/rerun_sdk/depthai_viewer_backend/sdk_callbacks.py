@@ -64,8 +64,8 @@ class SdkCallbacks:
         rr.log_imu([accel.z, accel.x, accel.y], [gyro.z, gyro.x, gyro.y], self.ahrs.Q, [mag.x, mag.y, mag.z])
 
     def on_pointcloud(self, packet: PointcloudPacket):
-        if Topic.PointCloud not in self.store.subscriptions:
-            return
+        # if Topic.PointCloud not in self.store.subscriptions:
+        #     return
         colors = cv2.cvtColor(packet.color_frame.getCvFrame(), cv2.COLOR_BGR2RGB).reshape(-1, 3)
         points = packet.points.reshape(-1, 3)
 

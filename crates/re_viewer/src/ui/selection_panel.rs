@@ -263,9 +263,6 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                                 });
                             });
 
-                            ui.horizontal(|ui| {
-                                ui.checkbox(&mut depth.pointcloud.enabled, "Point Cloud");
-                            });
                         });
 
                         ui.vertical(|ui| {
