@@ -3,15 +3,20 @@ from typing import Callable, Dict, List, Tuple, Union
 import cv2
 import depthai as dai
 import numpy as np
+import rerun as rr
 from ahrs.filters import Mahony
 from depthai_sdk import FramePacket
-from depthai_sdk.classes.packets import DetectionPacket, IMUPacket, PointcloudPacket, TwoStagePacket
+from depthai_sdk.classes.packets import (
+    DetectionPacket,
+    IMUPacket,
+    PointcloudPacket,
+    TwoStagePacket,
+)
+from rerun.components.rect2d import RectFormat
 
-import rerun as rr
 from depthai_viewer_backend import classification_labels
 from depthai_viewer_backend.store import Store
 from depthai_viewer_backend.topic import Topic
-from rerun.components.rect2d import RectFormat
 
 
 class EntityPath:

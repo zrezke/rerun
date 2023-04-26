@@ -9,7 +9,6 @@ def run_cube():
     import math
 
     import numpy as np
-
     import rerun as rr
 
     rr.init("Cube", spawn=True, default_enabled=True)
