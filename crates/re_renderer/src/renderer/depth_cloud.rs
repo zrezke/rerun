@@ -11,8 +11,6 @@
 //! The vertex shader backprojects the depth texture using the user-specified intrinsics, and then
 //! behaves pretty much exactly like our point cloud renderer (see [`point_cloud.rs`]).
 
-use std::num::NonZeroU32;
-
 use itertools::Itertools;
 use smallvec::smallvec;
 
@@ -36,8 +34,19 @@ use super::{
 
 // ---
 
+#[derive(Debug, Clone, Copy)]
+enum AlbedoColorSpace {
+    RGB,
+    MONO,
+}
+
 mod gpu_data {
-    use crate::{wgpu_buffer_types, PickingLayerObjectId};
+    use crate::{
+        wgpu_buffer_types::{self, U32RowPadded},
+        PickingLayerObjectId,
+    };
+
+    use super::{AlbedoColorSpace, DepthCloudAlbedoData};
 
     /// Keep in sync with mirror in `depth_cloud.wgsl.`
     #[repr(C, align(256))]
@@ -63,10 +72,13 @@ mod gpu_data {
         /// Which colormap should be used.
         pub colormap: u32,
 
+        /// Is the albedo texture rgb or mono
+        pub albedo_color_space: wgpu_buffer_types::U32RowPadded,
+
         /// Changes over different draw-phases.
         pub radius_boost_in_ui_points: wgpu_buffer_types::F32RowPadded,
 
-        pub end_padding: [wgpu_buffer_types::PaddingRow; 16 - 4 - 3 - 1 - 1 - 1],
+        pub end_padding: [wgpu_buffer_types::PaddingRow; 16 - 4 - 3 - 1 - 1 - 1 - 1],
     }
 
     impl DepthCloudInfoUBO {
@@ -97,6 +109,15 @@ mod gpu_data {
                 point_radius_from_world_depth: *point_radius_from_world_depth,
                 max_depth_in_world: *max_depth_in_world,
                 colormap: *colormap as u32,
+                albedo_color_space: (depth_cloud
+                    .albedo_data
+                    .as_ref()
+                    .map(|albedo_data| match albedo_data {
+                        DepthCloudAlbedoData::Mono8(_) => AlbedoColorSpace::MONO,
+                        _ => AlbedoColorSpace::RGB,
+                    })
+                    .unwrap_or(AlbedoColorSpace::RGB) as u32)
+                    .into(),
                 radius_boost_in_ui_points: radius_boost_in_ui_points.into(),
                 picking_layer_object_id: *picking_object_id,
                 end_padding: Default::default(),
@@ -115,6 +136,7 @@ pub enum DepthCloudAlbedoData {
     Rgb8Srgb(Vec<u8>),
     Rgba8(Vec<u8>),
     Rgba8Srgb(Vec<u8>),
+    Mono8(Vec<u8>),
 }
 
 pub struct DepthCloud {
@@ -286,7 +308,6 @@ impl DepthCloudDrawData {
                     depth_cloud.depth_texture.format(),
                 ));
             }
-
             let albedo_texture = depth_cloud
                 .albedo_data
                 .as_ref()
@@ -330,10 +351,14 @@ impl DepthCloudDrawData {
                             data.as_slice(),
                         )
                     }
+                    DepthCloudAlbedoData::Mono8(data) => create_and_upload_texture(
+                        ctx,
+                        depth_cloud.albedo_dimensions,
+                        wgpu::TextureFormat::R8Unorm,
+                        data.as_slice(),
+                    ),
                 })
                 .unwrap_or_else(|| {
-                    // TODO: need a permanent fake texture... I think we have one somewhere already
-                    // right?
                     create_and_upload_texture(
                         ctx,
                         (1, 1).into(),
@@ -341,7 +366,6 @@ impl DepthCloudDrawData {
                         [0u8; 4].as_slice(),
                     )
                 });
-
             let mk_bind_group = |label, ubo: BindGroupEntry| {
                 ctx.gpu_resources.bind_groups.alloc(
                     &ctx.device,
@@ -373,13 +397,6 @@ impl DepthCloudDrawData {
     }
 }
 
-// TODO: gotta refactor this one
-// fn create_and_upload_texture<T: bytemuck::Pod>(
-//     ctx: &mut RenderContext,
-//     depth_cloud: &DepthCloud,
-//     data: &[T],
-//     force_32bit: bool,
-// ) -> GpuTexture {
 fn create_and_upload_texture<T: bytemuck::Pod>(
     ctx: &mut RenderContext,
     dimensions: glam::UVec2,

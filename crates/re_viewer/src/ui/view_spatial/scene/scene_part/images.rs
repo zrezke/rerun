@@ -167,7 +167,7 @@ impl ImagesPart {
         scene: &mut SceneSpatial,
         ctx: &mut ViewerContext<'_>,
         transforms: &TransformCache,
-        properties: &EntityProperties,
+        properties: &mut EntityProperties,
         ent_path: &EntityPath,
         world_from_obj: glam::Mat4,
         highlights: &SpaceViewHighlights,
@@ -256,7 +256,7 @@ impl ImagesPart {
         scene: &mut SceneSpatial,
         ctx: &mut ViewerContext<'_>,
         transforms: &TransformCache,
-        properties: &EntityProperties,
+        properties: &mut EntityProperties,
         tensor: &DecodedTensor,
         ent_path: &EntityPath,
         pinhole_ent_path: &EntityPath,
@@ -355,9 +355,18 @@ impl ImagesPart {
                 // TODO(cmc): We should easily be able to pass almost any datatype here.
 
                 albedo_data = match &tensor.data {
-                    // TODO: check shape to know whether we have alpha
-                    // TODO: just go through image cache
-                    TensorData::U8(data) => Some(DepthCloudAlbedoData::Rgb8Srgb(data.0.to_vec())),
+                    TensorData::U8(data) => {
+                        if let Some([_, _, c]) = tensor.image_height_width_channels() {
+                            match c {
+                                1 => Some(DepthCloudAlbedoData::Mono8(data.0.to_vec())),
+                                3 => Some(DepthCloudAlbedoData::Rgb8(data.0.to_vec())),
+                                4 => Some(DepthCloudAlbedoData::Rgb8Srgb(data.0.to_vec())),
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        }
+                    }
                     _ => {
                         re_log::warn_once!(
                             "Tensor datatype not supported for albedo texture ({:?})",
@@ -425,7 +434,7 @@ impl ScenePart for ImagesPart {
     ) {
         crate::profile_scope!("ImagesPart");
 
-        for (ent_path, props) in query.iter_entities() {
+        for (ent_path, mut props) in query.iter_entities() {
             let Some(world_from_obj) = transforms.reference_from_entity(ent_path) else {
                 continue;
             };
@@ -445,7 +454,7 @@ impl ScenePart for ImagesPart {
                         scene,
                         ctx,
                         transforms,
-                        &props,
+                        &mut props,
                         ent_path,
                         world_from_obj,
                         highlights,

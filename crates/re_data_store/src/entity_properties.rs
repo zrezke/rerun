@@ -185,7 +185,7 @@ pub enum ColorMapper {
 impl Default for ColorMapper {
     #[inline]
     fn default() -> Self {
-        Self::Colormap(Colormap::default())
+        Self::AlbedoTexture
     }
 }
 

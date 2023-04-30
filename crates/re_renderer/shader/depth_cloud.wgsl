@@ -43,9 +43,15 @@ struct DepthCloudInfo {
     /// Configures color mapping mode, see `colormap.wgsl`.
     colormap: u32,
 
+    /// Is the albedo texture rgb or mono
+    albedo_color_space: u32,
+
     /// Changes between the opaque and outline draw-phases.
     radius_boost_in_ui_points: f32,
 };
+
+const ALBEDO_COLOR_RGB: u32 = 0u;
+const ALBEDO_COLOR_MONO: u32 = 1u;
 
 @group(1) @binding(0)
 var<uniform> depth_cloud_info: DepthCloudInfo;
@@ -53,7 +59,7 @@ var<uniform> depth_cloud_info: DepthCloudInfo;
 @group(1) @binding(1)
 var depth_texture: texture_2d<f32>;
 
-/// Only sampled if `DepthCloudInfo::colormap == 100`.
+/// Only sampled if `DepthCloudInfo::colormap == ALBEDO_TEXTURE`.
 @group(1) @binding(2)
 var albedo_texture: texture_2d<f32>;
 
@@ -106,6 +112,9 @@ fn compute_point_data(quad_idx: u32) -> PointData {
                 Vec2(texcoords) / Vec2(textureDimensions(albedo_texture)),
                 0.0
             );
+            if depth_cloud_info.albedo_color_space == ALBEDO_COLOR_MONO {
+                color = Vec4(linear_from_srgb(Vec3(color.r)), 1.0);
+            }
         } else {
             color = Vec4(colormap_srgb(depth_cloud_info.colormap, world_space_depth), 1.0);
         }

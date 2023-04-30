@@ -262,7 +262,6 @@ impl<'a, 'b> DepthaiTabs<'a, 'b> {
                                     )
                                 });
                             });
-
                         });
 
                         ui.vertical(|ui| {
@@ -1012,7 +1011,6 @@ fn colormap_props_ui(
                     }
                 };
 
-                // TODO: that is not ideal but I don't want to import yet another proc-macro...
                 add_label(ColorMapper::Colormap(Colormap::Grayscale));
                 add_label(ColorMapper::Colormap(Colormap::Turbo));
                 add_label(ColorMapper::Colormap(Colormap::Viridis));
@@ -1042,7 +1040,19 @@ fn colormap_props_ui(
         if let Some(current) = current.as_ref() {
             combo = combo.selected_text(current.to_string());
         } else {
-            combo = combo.selected_text("(empty)");
+            // Select the first image-shaped tensor we find
+            // tree.visit_children_recursively(&mut |ent_path| {
+            //     if entity_props.albedo_texture.is_some() {
+            //         return;
+            //     }
+            //     let Some(tensor) =
+            //         query_latest_single::<Tensor>(&ctx.log_db.entity_db, ent_path, &query) else {
+            //             return;
+            //         };
+            //     if tensor.is_shaped_like_an_image() {
+            //         entity_props.albedo_texture = Some(ent_path.clone());
+            //     }
+            // });
         }
 
         combo.show_ui(ui, |ui| {

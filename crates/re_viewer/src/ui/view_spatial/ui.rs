@@ -5,7 +5,7 @@ use re_format::format_f32;
 use egui::{NumExt, WidgetText};
 use macaw::BoundingBox;
 use re_log_types::component_types::{Tensor, TensorDataMeaning};
-use re_renderer::OutlineConfig;
+use re_renderer::{Colormap, OutlineConfig};
 
 use crate::{
     misc::{
@@ -232,6 +232,40 @@ impl ViewSpatialState {
 
             if properties.backproject_radius_scale.is_auto() {
                 properties.backproject_radius_scale = EditableAutoValue::Auto(1.0);
+            }
+
+            let colormap = match *properties.color_mapper.get() {
+                re_data_store::ColorMapper::Colormap(colormap) => match colormap {
+                    re_data_store::Colormap::Grayscale => Colormap::Grayscale,
+                    re_data_store::Colormap::Turbo => Colormap::Turbo,
+                    re_data_store::Colormap::Viridis => Colormap::Viridis,
+                    re_data_store::Colormap::Plasma => Colormap::Plasma,
+                    re_data_store::Colormap::Magma => Colormap::Magma,
+                    re_data_store::Colormap::Inferno => Colormap::Inferno,
+                },
+                re_data_store::ColorMapper::AlbedoTexture => Colormap::AlbedoTexture,
+            };
+            // Set albedo texture if it is not set yet
+            if colormap == Colormap::AlbedoTexture && properties.albedo_texture.is_none() {
+                let mut tex_ep = None;
+                if let Some(tree) = entity_path
+                    .parent()
+                    .and_then(|path| ctx.log_db.entity_db.tree.subtree(&path))
+                {
+                    tree.visit_children_recursively(&mut |ent_path| {
+                    if tex_ep.is_some() {
+                        return;
+                    }
+                    let Some(tensor) =
+                        query_latest_single::<Tensor>(&ctx.log_db.entity_db, ent_path, &ctx.current_query()) else {
+                            return;
+                        };
+                    if tensor.is_shaped_like_an_image() {
+                        tex_ep = Some(ent_path.clone());
+                    }
+                });
+                    properties.albedo_texture = tex_ep;
+                }
             }
 
             data_blueprint
