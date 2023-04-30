@@ -1,4 +1,3 @@
-use core::fmt;
 use std::{any::Any, hash::Hash};
 
 use ahash::HashMap;
@@ -498,8 +497,10 @@ impl eframe::App for App {
         if self.shutdown.load(std::sync::atomic::Ordering::Relaxed) {
             self.state.depthai_state.shutdown();
             #[cfg(not(target_arch = "wasm32"))]
-            self.backend_handle.kill();
-            frame.close();
+            {
+                self.backend_handle.kill();
+                frame.close();
+            }
             return;
         }
 

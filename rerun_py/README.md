@@ -10,11 +10,11 @@ It lets you debug and understand the internal state and data of your systems wit
 ## Install
 
 ```sh
-pip3 install rerun-sdk
+pip3 install depthai-viewer
 ```
 
 ℹ️ Note:
-The Python module is called `rerun`, while the package published on PyPI is `rerun-sdk`.
+The Python module is called `rerun`, while the package published on PyPI is `depthai-viewer`.
 
 ## Example
 
