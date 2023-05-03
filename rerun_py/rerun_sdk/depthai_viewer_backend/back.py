@@ -230,7 +230,9 @@ class DepthaiViewerBack:
         print("Resetting...")
         if self._device:
             print("Closing device...")
+            self._device.oak_cam.device.close()
             self._device.oak_cam.__exit__(None, None, None)
+            self._device.oak_cam = None
             self.set_device(None)
         print("Done")
         return True, {"message": "Reset successful"}
@@ -249,9 +251,13 @@ class DepthaiViewerBack:
         try:
             device_properties = self._device.get_device_properties()
             return True, {"message:": "Device selected successfully", "device_properties": device_properties}
-        except RuntimeError:
+        except RuntimeError as e:
+            print("Failed to get device properties:", e)
             self.on_reset()
-            return False, {"message": "Failed to get device properties", "device_properties": {}}
+            print("Restarting backend...")
+            # For now exit the backend, the frontend will restart it (TODO(filip): Why does "Device already closed or disconnected: Input/output error happen")
+            exit(-1)
+            # return False, {"message": "Failed to get device properties", "device_properties": {}}
 
     def update_pipeline(self) -> bool:
         if not self._device:

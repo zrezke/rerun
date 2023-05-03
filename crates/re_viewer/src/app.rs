@@ -102,12 +102,12 @@ pub struct App {
     icon_status: AppIconStatus,
 
     #[cfg(not(target_arch = "wasm32"))]
-    backend_handle: std::process::Child,
+    backend_handle: Option<std::process::Child>,
 }
 
 impl App {
     #[cfg(not(target_arch = "wasm32"))]
-    fn spawn_backend() -> std::process::Child {
+    fn spawn_backend() -> Option<std::process::Child> {
         // TODO(filip): Is there some way I can know for sure where depthai_viewer_backend is?
         let backend_handle = match std::process::Command::new("python")
             .args(["-m", "depthai_viewer_backend"])
@@ -134,11 +134,11 @@ impl App {
                 }
             }
         };
-        assert!(
-            backend_handle.is_some(),
-            "Couldn't start backend, exiting..."
-        );
-        backend_handle.unwrap()
+        // assert!(
+        //     backend_handle.is_some(),
+        //     "Couldn't start backend, exiting..."
+        // );
+        backend_handle
     }
 
     /// Create a viewer that receives new log messages over time
@@ -305,7 +305,9 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             Command::Quit => {
                 self.state.depthai_state.shutdown();
-                self.backend_handle.kill();
+                if let Some(backend_handle) = &mut self.backend_handle {
+                    backend_handle.kill();
+                }
                 _frame.close();
             }
 
@@ -471,7 +473,9 @@ impl eframe::App for App {
     #[cfg(not(target_arch = "wasm32"))]
     fn on_close_event(&mut self) -> bool {
         self.state.depthai_state.shutdown();
-        self.backend_handle.kill();
+        if let Some(backend_handle) = &mut self.backend_handle {
+            backend_handle.kill();
+        }
         true
     }
 
@@ -484,6 +488,26 @@ impl eframe::App for App {
     fn update(&mut self, egui_ctx: &egui::Context, frame: &mut eframe::Frame) {
         let frame_start = Instant::now();
         self.state.depthai_state.update(); // Always update depthai state
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match &mut self.backend_handle {
+                Some(handle) => match handle.try_wait() {
+                    Ok(status) => {
+                        if status.is_some() {
+                            handle.kill();
+                            re_log::debug!("Backend process has exited, restarting!");
+                            self.backend_handle = App::spawn_backend();
+                        }
+                    }
+                    Err(_) => {}
+                },
+                None => self.backend_handle = App::spawn_backend(),
+            };
+        }
+
+        if self.backend_handle.is_none() {
+            self.backend_handle = App::spawn_backend();
+        };
 
         if self.startup_options.memory_limit.limit.is_none() {
             // we only warn about high memory usage if the user hasn't specified a limit
@@ -498,7 +522,9 @@ impl eframe::App for App {
             self.state.depthai_state.shutdown();
             #[cfg(not(target_arch = "wasm32"))]
             {
-                self.backend_handle.kill();
+                if let Some(backend_handle) = &mut self.backend_handle {
+                    backend_handle.kill();
+                }
                 frame.close();
             }
             return;
