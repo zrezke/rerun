@@ -1,4 +1,3 @@
-use core::fmt;
 use std::{any::Any, hash::Hash};
 
 use ahash::HashMap;
@@ -101,9 +100,47 @@ pub struct App {
     analytics: ViewerAnalytics,
 
     icon_status: AppIconStatus,
+
+    #[cfg(not(target_arch = "wasm32"))]
+    backend_handle: Option<std::process::Child>,
 }
 
 impl App {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn_backend() -> Option<std::process::Child> {
+        // TODO(filip): Is there some way I can know for sure where depthai_viewer_backend is?
+        let backend_handle = match std::process::Command::new("python")
+            .args(["-m", "depthai_viewer_backend"])
+            .spawn()
+        {
+            Ok(child) => {
+                println!("Backend started successfully.");
+                Some(child)
+            }
+            Err(err) => {
+                eprintln!("Failed to start depthai viewer: {err}");
+                match std::process::Command::new("python3")
+                    .args(["-m", "depthai_viewer_backend"])
+                    .spawn()
+                {
+                    Ok(child) => {
+                        println!("Backend started successfully.");
+                        Some(child)
+                    }
+                    Err(err) => {
+                        eprintln!("Failed to start depthai_viewer {err}");
+                        None
+                    }
+                }
+            }
+        };
+        // assert!(
+        //     backend_handle.is_some(),
+        //     "Couldn't start backend, exiting..."
+        // );
+        backend_handle
+    }
+
     /// Create a viewer that receives new log messages over time
     pub fn from_receiver(
         build_info: re_build_info::BuildInfo,
@@ -159,6 +196,8 @@ impl App {
             analytics,
 
             icon_status: AppIconStatus::NotSetTryAgain,
+            #[cfg(not(target_arch = "wasm32"))]
+            backend_handle: App::spawn_backend(),
         }
     }
 
@@ -266,6 +305,9 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             Command::Quit => {
                 self.state.depthai_state.shutdown();
+                if let Some(backend_handle) = &mut self.backend_handle {
+                    backend_handle.kill();
+                }
                 _frame.close();
             }
 
@@ -431,6 +473,9 @@ impl eframe::App for App {
     #[cfg(not(target_arch = "wasm32"))]
     fn on_close_event(&mut self) -> bool {
         self.state.depthai_state.shutdown();
+        if let Some(backend_handle) = &mut self.backend_handle {
+            backend_handle.kill();
+        }
         true
     }
 
@@ -443,6 +488,26 @@ impl eframe::App for App {
     fn update(&mut self, egui_ctx: &egui::Context, frame: &mut eframe::Frame) {
         let frame_start = Instant::now();
         self.state.depthai_state.update(); // Always update depthai state
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match &mut self.backend_handle {
+                Some(handle) => match handle.try_wait() {
+                    Ok(status) => {
+                        if status.is_some() {
+                            handle.kill();
+                            re_log::debug!("Backend process has exited, restarting!");
+                            self.backend_handle = App::spawn_backend();
+                        }
+                    }
+                    Err(_) => {}
+                },
+                None => self.backend_handle = App::spawn_backend(),
+            };
+        }
+
+        if self.backend_handle.is_none() {
+            self.backend_handle = App::spawn_backend();
+        };
 
         if self.startup_options.memory_limit.limit.is_none() {
             // we only warn about high memory usage if the user hasn't specified a limit
@@ -456,7 +521,12 @@ impl eframe::App for App {
         if self.shutdown.load(std::sync::atomic::Ordering::Relaxed) {
             self.state.depthai_state.shutdown();
             #[cfg(not(target_arch = "wasm32"))]
-            frame.close();
+            {
+                if let Some(backend_handle) = &mut self.backend_handle {
+                    backend_handle.kill();
+                }
+                frame.close();
+            }
             return;
         }
 
@@ -744,7 +814,7 @@ impl App {
     fn cleanup(&mut self) {
         crate::profile_function!();
 
-        self.log_dbs.retain(|_, log_db| !log_db.is_empty());
+        self.log_dbs.retain(|_, log_db| !log_db.is_default());
 
         if !self.log_dbs.contains_key(&self.state.selected_rec_id) {
             self.state.selected_rec_id = self.log_dbs.keys().next().cloned().unwrap_or_default();
@@ -851,7 +921,7 @@ impl App {
     fn log_db_is_nonempty(&self) -> bool {
         self.log_dbs
             .get(&self.state.selected_rec_id)
-            .map_or(false, |log_db| !log_db.is_empty())
+            .map_or(false, |log_db| !log_db.is_default())
     }
 
     fn log_db(&mut self) -> &mut LogDb {
@@ -1018,7 +1088,8 @@ impl AppState {
         let blueprint = blueprints
             .entry(selected_app_id.clone())
             .or_insert_with(|| Blueprint::new(ui.ctx()));
-        time_panel.show_panel(&mut ctx, blueprint, ui);
+        // Hide time panel for now, reuse for recordings in the future
+        // time_panel.show_panel(&mut ctx, blueprint, ui);
         selection_panel.show_panel(&mut ctx, ui, blueprint);
 
         let central_panel_frame = egui::Frame {

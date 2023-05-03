@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use super::depthai;
 
-// TODO:(filip) make this try to reconnect until a successful connection
+// TODO(filip) make this try to reconnect until a successful connection
 async fn spawn_ws_client(
     recv_tx: crossbeam_channel::Sender<WsMessage>,
     send_rx: crossbeam_channel::Receiver<WsMessage>,
@@ -63,7 +63,7 @@ async fn spawn_ws_client(
                 }
             }
             for error in error_rx.try_iter() {
-                re_log::debug!("Websocket error: {:?}", error);
+                re_log::debug!("Websocket error: {:}", error);
             }
         } else {
             re_log::error!("Coudln't create websocket");
@@ -224,8 +224,8 @@ impl WebSocket {
                         Ok(back_message) => {
                             return Some(back_message);
                         }
-                        Err(error) => {
-                            re_log::error!("Error: {:?}", error);
+                        Err(err) => {
+                            re_log::error!("Error: {:}", err);
                             return None;
                         }
                     }
@@ -235,6 +235,7 @@ impl WebSocket {
         }
         None
     }
+
     pub fn send(&self, message: String) {
         self.sender.send(WsMessage::Text(message));
         // TODO(filip): This is a hotfix for the websocket not sending the message

@@ -63,7 +63,8 @@ pub use rect::Rect2D;
 pub use scalar::{Scalar, ScalarPlotProps};
 pub use size::Size3D;
 pub use tensor::{
-    Tensor, TensorCastError, TensorData, TensorDataMeaning, TensorDimension, TensorId,
+    DecodedTensor, Tensor, TensorCastError, TensorData, TensorDataMeaning, TensorDimension,
+    TensorId,
 };
 #[cfg(feature = "image")]
 pub use tensor::{TensorImageLoadError, TensorImageSaveError};
@@ -215,6 +216,7 @@ where
 
 pub struct FastFixedSizeListArray<T, const SIZE: usize>(std::marker::PhantomData<T>);
 
+#[cfg(not(target_os = "windows"))]
 extern "C" {
     fn do_not_call_into_iter(); // we never define this function, so the linker will fail
 }

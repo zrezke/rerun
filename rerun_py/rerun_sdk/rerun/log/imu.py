@@ -1,14 +1,16 @@
-from rerun import bindings
-from rerun.log.log_decorator import log_decorator
-from rerun.components.imu import Imu
-from typing import Dict, Any
-import numpy.typing as npt
+from typing import Any, Dict, Union
+
 import numpy as np
+import numpy.typing as npt
+
+from rerun import bindings
+from rerun.components.imu import Imu
+from rerun.log.log_decorator import log_decorator
 
 
 @log_decorator
 def log_imu(
-    accel: npt.ArrayLike, gyro: npt.ArrayLike, orientation: npt.ArrayLike, mag: npt.ArrayLike | None = None
+    accel: npt.ArrayLike, gyro: npt.ArrayLike, orientation: npt.ArrayLike, mag: Union[npt.ArrayLike, None] = None
 ) -> None:
     """
     Log an IMU sensor reading.
@@ -21,6 +23,10 @@ def log_imu(
         Acceleration vector in m/s^2.
     gyro:
         Angular velocity vector in rad/s.
+    orientation:
+        Orientation quaternion.
+    mag:
+        Magnetometer vector in uT.
     """
 
     if accel is not None:
@@ -45,6 +51,6 @@ def log_imu(
     if orientation.size != 4:
         raise ValueError(f"Orientation quaternion must have a length of 4, got: {orientation.size}")
 
-    instanced["rerun.imu"] = Imu.create(accel, gyro, orientation, mag)
+    instanced["rerun.imu"] = Imu.create(accel, gyro, orientation, mag)  # type: ignore[arg-type]
     # Fixed imu entity path
     bindings.log_arrow_msg("imu_data", components=instanced, timeless=False)

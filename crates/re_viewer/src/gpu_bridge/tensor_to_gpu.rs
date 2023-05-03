@@ -1,12 +1,13 @@
 //! Upload [`Tensor`] to [`re_renderer`].
 
+use anyhow::Context;
 use std::borrow::Cow;
 
 use bytemuck::{allocation::pod_collect_to_vec, cast_slice, Pod};
 use egui::util::hash;
 use wgpu::TextureFormat;
 
-use re_log_types::component_types::{Tensor, TensorData};
+use re_log_types::component_types::{DecodedTensor, Tensor, TensorData};
 use re_renderer::{
     renderer::{ColorMapper, ColormappedTexture},
     resource_managers::Texture2DCreationDesc,
@@ -28,7 +29,7 @@ use super::try_get_or_create_texture;
 pub fn tensor_to_gpu(
     render_ctx: &mut RenderContext,
     debug_name: &str,
-    tensor: &Tensor,
+    tensor: &DecodedTensor,
     tensor_stats: &TensorStats,
     annotations: &crate::ui::Annotations,
 ) -> anyhow::Result<ColormappedTexture> {
@@ -60,7 +61,7 @@ pub fn tensor_to_gpu(
 fn color_tensor_to_gpu(
     render_ctx: &mut RenderContext,
     debug_name: &str,
-    tensor: &Tensor,
+    tensor: &DecodedTensor,
     tensor_stats: &TensorStats,
 ) -> anyhow::Result<ColormappedTexture> {
     let texture_handle = try_get_or_create_texture(render_ctx, hash(tensor.id()), || {
@@ -94,10 +95,10 @@ fn color_tensor_to_gpu(
             width,
             height,
         })
-    })?;
+    })
+    .map_err(|err| anyhow::anyhow!("Failed to create texture for color tensor: {err}"))?;
 
-    let gpu_texture = render_ctx.texture_manager_2d.get(&texture_handle);
-    let texture_format = gpu_texture.creation_desc.format;
+    let texture_format = texture_handle.format();
 
     // Special casing for normalized textures used above:
     let range = if matches!(
@@ -111,7 +112,7 @@ fn color_tensor_to_gpu(
         crate::gpu_bridge::range(tensor_stats)?
     };
 
-    let color_mapper = if texture_format.describe().components == 1 {
+    let color_mapper = if re_renderer::texture_info::num_texture_components(texture_format) == 1 {
         // Single-channel images = luminance = grayscale
         Some(ColorMapper::Function(re_renderer::Colormap::Grayscale))
     } else {
@@ -132,7 +133,7 @@ fn color_tensor_to_gpu(
 fn class_id_tensor_to_gpu(
     render_ctx: &mut RenderContext,
     debug_name: &str,
-    tensor: &Tensor,
+    tensor: &DecodedTensor,
     tensor_stats: &TensorStats,
     annotations: &crate::ui::Annotations,
 ) -> anyhow::Result<ColormappedTexture> {
@@ -152,14 +153,13 @@ fn class_id_tensor_to_gpu(
         .ok_or_else(|| anyhow::anyhow!("compressed_tensor!?"))?;
     anyhow::ensure!(0.0 <= min, "Negative class id");
 
-    // create a lookup texture for the colors that's 256 wide,
-    // and as many rows as needed to fit all the classes.
-    anyhow::ensure!(max <= 65535.0, "Too many class ids");
+    anyhow::ensure!(max <= 65535.0, "Too many class ids"); // we only support u8 and u16 tensors
 
     // We pack the colormap into a 2D texture so we don't go over the max texture size.
     // We only support u8 and u16 class ids, so 256^2 is the biggest texture we need.
+    let num_colors = (max + 1.0) as usize;
     let colormap_width = 256;
-    let colormap_height = (max as usize + colormap_width - 1) / colormap_width;
+    let colormap_height = (num_colors + colormap_width - 1) / colormap_width;
 
     let colormap_texture_handle =
         get_or_create_texture(render_ctx, hash(annotations.row_id), || {
@@ -180,11 +180,13 @@ fn class_id_tensor_to_gpu(
                 width: colormap_width as u32,
                 height: colormap_height as u32,
             }
-        });
+        })
+        .context("Failed to create class_id_colormap.")?;
 
     let main_texture_handle = try_get_or_create_texture(render_ctx, hash(tensor.id()), || {
         general_texture_creation_desc_from_tensor(debug_name, tensor)
-    })?;
+    })
+    .map_err(|err| anyhow::anyhow!("Failed to create texture for class id tensor: {err}"))?;
 
     Ok(ColormappedTexture {
         texture: main_texture_handle,
@@ -200,7 +202,7 @@ fn class_id_tensor_to_gpu(
 fn depth_tensor_to_gpu(
     render_ctx: &mut RenderContext,
     debug_name: &str,
-    tensor: &Tensor,
+    tensor: &DecodedTensor,
     tensor_stats: &TensorStats,
 ) -> anyhow::Result<ColormappedTexture> {
     let [_height, _width, depth] = height_width_depth(tensor)?;
@@ -213,7 +215,8 @@ fn depth_tensor_to_gpu(
 
     let texture = try_get_or_create_texture(render_ctx, hash(tensor.id()), || {
         general_texture_creation_desc_from_tensor(debug_name, tensor)
-    })?;
+    })
+    .map_err(|err| anyhow::anyhow!("Failed to create depth tensor texture: {err}"))?;
 
     Ok(ColormappedTexture {
         texture,
@@ -223,7 +226,10 @@ fn depth_tensor_to_gpu(
     })
 }
 
-fn depth_tensor_range(tensor: &Tensor, tensor_stats: &TensorStats) -> anyhow::Result<(f64, f64)> {
+fn depth_tensor_range(
+    tensor: &DecodedTensor,
+    tensor_stats: &TensorStats,
+) -> anyhow::Result<(f64, f64)> {
     let range = tensor_stats.range.ok_or(anyhow::anyhow!(
         "Tensor has no range!? Was this compressed?"
     ))?;
@@ -255,7 +261,7 @@ fn depth_tensor_range(tensor: &Tensor, tensor_stats: &TensorStats) -> anyhow::Re
 /// Uses no `Unorm/Snorm` formats.
 fn general_texture_creation_desc_from_tensor<'a>(
     debug_name: &str,
-    tensor: &'a Tensor,
+    tensor: &'a DecodedTensor,
 ) -> anyhow::Result<Texture2DCreationDesc<'a>> {
     let [height, width, depth] = height_width_depth(tensor)?;
 
@@ -277,7 +283,7 @@ fn general_texture_creation_desc_from_tensor<'a>(
                 TensorData::F64(buf) => (narrow_f64_to_f32s(buf), TextureFormat::R32Float), // narrowing to f32!
 
                 TensorData::JPEG(_) => {
-                    anyhow::bail!("JPEGs should have been decoded at this point")
+                    unreachable!("DecodedTensor cannot contain a JPEG")
                 }
             }
         }
@@ -299,7 +305,7 @@ fn general_texture_creation_desc_from_tensor<'a>(
                 TensorData::F64(buf) => (narrow_f64_to_f32s(buf), TextureFormat::Rg32Float), // narrowing to f32!
 
                 TensorData::JPEG(_) => {
-                    anyhow::bail!("JPEGs should have been decoded at this point")
+                    unreachable!("DecodedTensor cannot contain a JPEG")
                 }
             }
         }
@@ -336,7 +342,7 @@ fn general_texture_creation_desc_from_tensor<'a>(
                 ),
 
                 TensorData::JPEG(_) => {
-                    anyhow::bail!("JPEGs should have been decoded at this point")
+                    unreachable!("DecodedTensor cannot contain a JPEG")
                 }
             }
         }
@@ -360,7 +366,7 @@ fn general_texture_creation_desc_from_tensor<'a>(
                 TensorData::F64(buf) => (narrow_f64_to_f32s(buf), TextureFormat::Rgba32Float), // narrowing to f32!
 
                 TensorData::JPEG(_) => {
-                    anyhow::bail!("JPEGs should have been decoded at this point")
+                    unreachable!("DecodedTensor cannot contain a JPEG")
                 }
             }
         }
