@@ -255,7 +255,8 @@ class DepthaiViewerBack:
             print("Failed to get device properties:", e)
             self.on_reset()
             print("Restarting backend...")
-            # For now exit the backend, the frontend will restart it (TODO(filip): Why does "Device already closed or disconnected: Input/output error happen")
+            # For now exit the backend, the frontend will restart it
+            # (TODO(filip): Why does "Device already closed or disconnected: Input/output error happen")
             exit(-1)
             # return False, {"message": "Failed to get device properties", "device_properties": {}}
 
