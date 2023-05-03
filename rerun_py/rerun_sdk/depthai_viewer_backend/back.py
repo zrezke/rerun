@@ -38,10 +38,9 @@ mono_wh_to_enum = {
 
 class SelectedDevice:
     id: str
-    _right_cam_intrinsic_matrix: np.ndarray = None
+    intrinsic_matrix: Dict[Tuple[int, int], np.ndarray] = {}
     calibration_data: dai.CalibrationHandler = None
 
-    # Main nodes
     _color: CameraComponent = None
     _left: CameraComponent = None
     _right: CameraComponent = None
@@ -57,11 +56,11 @@ class SelectedDevice:
         print("Oak cam: ", self.oak_cam)
 
     def get_intrinsic_matrix(self, width: int, height: int) -> np.ndarray:
-        if self._right_cam_intrinsic_matrix is not None:
-            return self._right_cam_intrinsic_matrix
+        if self.intrinsic_matrix.get((width, height)) is np.ndarray:
+            return self.intrinsic_matrix.get((width, height))
         M_right = self.calibration_data.getCameraIntrinsics(dai.CameraBoardSocket.RIGHT, dai.Size2f(width, height))
-        self._right_cam_intrinsic_matrix = np.array(M_right).reshape(3, 3)
-        return self._right_cam_intrinsic_matrix
+        self.intrinsic_matrix[(width, height)] = np.array(M_right).reshape(3, 3)
+        return self.intrinsic_matrix[(width, height)]
 
     def get_device_properties(self) -> Dict:
         dai_props = self.oak_cam.device.getConnectedCameraFeatures()
@@ -146,9 +145,9 @@ class SelectedDevice:
                 median=config.depth.median,
             )
             self.oak_cam.callback(self._stereo, callbacks.on_stereo_frame)
-            if config.depth.pointcloud and config.depth.pointcloud.enabled:
-                self._pc = self.oak_cam.create_pointcloud(stereo=self._stereo, colorize=self._color)
-                self.oak_cam.callback(self._pc, callbacks.on_pointcloud)
+            # if config.depth.pointcloud and config.depth.pointcloud.enabled:
+            #     self._pc = self.oak_cam.create_pointcloud(stereo=self._stereo, colorize=self._color)
+            #     self.oak_cam.callback(self._pc, callbacks.on_pointcloud)
 
         if config.imu:
             print("Creating IMU")
@@ -190,8 +189,7 @@ class SelectedDevice:
         if running:
             self.oak_cam.poll()
             self.calibration_data = self.oak_cam.device.readCalibration()
-            self._xyz = None
-            self._right_cam_intrinsic_matrix = None
+            self.intrinsic_matrix = {}
         return running, {"message": "Pipeline started" if running else "Couldn't start pipeline"}
 
 
@@ -232,7 +230,9 @@ class DepthaiViewerBack:
         print("Resetting...")
         if self._device:
             print("Closing device...")
+            self._device.oak_cam.device.close()
             self._device.oak_cam.__exit__(None, None, None)
+            self._device.oak_cam = None
             self.set_device(None)
         print("Done")
         return True, {"message": "Reset successful"}
@@ -251,9 +251,14 @@ class DepthaiViewerBack:
         try:
             device_properties = self._device.get_device_properties()
             return True, {"message:": "Device selected successfully", "device_properties": device_properties}
-        except RuntimeError:
+        except RuntimeError as e:
+            print("Failed to get device properties:", e)
             self.on_reset()
-            return False, {"message": "Failed to get device properties", "device_properties": {}}
+            print("Restarting backend...")
+            # For now exit the backend, the frontend will restart it
+            # (TODO(filip): Why does "Device already closed or disconnected: Input/output error happen")
+            exit(-1)
+            # return False, {"message": "Failed to get device properties", "device_properties": {}}
 
     def update_pipeline(self) -> bool:
         if not self._device:

@@ -80,8 +80,8 @@ class MonoCameraConfiguration(BaseModel):
         return cls(board_socket="RIGHT", **kwargs)
 
 
-class PointcloudConfiguration(BaseModel):
-    enabled: bool = True
+# class PointcloudConfiguration(BaseModel):
+#     enabled: bool = True
 
 
 class DepthConfiguration(BaseModel):
@@ -92,7 +92,7 @@ class DepthConfiguration(BaseModel):
     subpixel_disparity: Optional[bool] = True
     align: Optional[dai.CameraBoardSocket] = dai.CameraBoardSocket.RGB
     sigma: int = 0  # 0..65535
-    pointcloud: PointcloudConfiguration | None = None
+    # pointcloud: PointcloudConfiguration | None = None
     confidence: int = 230
 
     class Config:

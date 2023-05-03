@@ -40,6 +40,7 @@
     "texcoords",
     "Tonemapper",
     "tonemapping",
+    "unsmoothed",
     "voronoi",
     "vram",
     "Wgsl"
@@ -70,6 +71,5 @@
   // INCLUDING attempts to publish a new release!
   "rust-analyzer.cargo.buildScripts.enable": false,
   "python.analysis.extraPaths": ["rerun_py/rerun_sdk"],
-  "ruff.args": ["--config", "rerun_py/pyproject.toml"],
-  "python.linting.pylintEnabled": false
+  "ruff.args": ["--config", "rerun_py/pyproject.toml"]
 }
